@@ -32,12 +32,22 @@ const adminRoutes = require('./routes/admin');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+function corsOrigin(origin, callback) {
+  if (!origin) return callback(null, true);
+  if (origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('10.0.2.2')) return callback(null, true);
+  if (ALLOWED_ORIGINS.length === 0) return callback(null, true);
+  if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+  return callback(new Error('Not allowed by CORS'));
+}
+
 // ---- basic hardening ---------------------------------------
 app.use(helmet());
 
 app.use(
   cors({
-    origin: '*',
+    origin: corsOrigin,
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
       'Content-Type',
@@ -106,7 +116,8 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
+    origin: corsOrigin,
+    credentials: true,
     methods: ['GET', 'POST'],
   },
 });

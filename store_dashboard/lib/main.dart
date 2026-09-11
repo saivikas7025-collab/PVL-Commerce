@@ -1,6 +1,7 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'config/api_config.dart';
 import 'package:http/http.dart' as http;
 
 void main() => runApp(const StoreDashboardApp());
@@ -43,7 +44,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() { _loading = true; _error = ''; });
     try {
       final response = await http.post(
-        Uri.parse('http://localhost:5000/api/store/login'),
+        Uri.parse('${ApiConfig.baseUrl}/store/login'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'storeId': int.tryParse(_storeIdController.text) ?? 0,
@@ -195,7 +196,7 @@ class _DashboardPageState extends State<DashboardPage> {
 // ============================================================
 class StoreService {
   final int storeId;
-  final String baseUrl = 'http://localhost:5000/api/store';
+  final String baseUrl = '${ApiConfig.baseUrl}/store';
 
   StoreService(this.storeId);
 
@@ -1169,7 +1170,7 @@ class _AddEditProductPageState extends State<AddEditProductPage> {
   Future<void> _loadCategories() async {
     setState(() { _loading = true; });
     try {
-      final res = await http.get(Uri.parse('http://localhost:5000/api/product-categories'));
+      final res = await http.get(Uri.parse('${ApiConfig.baseUrl}/product-categories'));
       if (res.statusCode == 200) {
         _categories = jsonDecode(res.body);
         if (_categoryId != null) await _loadSubcategories(_categoryId!);
@@ -1179,7 +1180,7 @@ class _AddEditProductPageState extends State<AddEditProductPage> {
   }
 
   Future<void> _loadSubcategories(int categoryId) async {
-    final res = await http.get(Uri.parse('http://localhost:5000/api/subcategories/$categoryId'));
+    final res = await http.get(Uri.parse('${ApiConfig.baseUrl}/subcategories/$categoryId'));
     if (res.statusCode == 200) {
       setState(() { _subcategories = jsonDecode(res.body); });
     }

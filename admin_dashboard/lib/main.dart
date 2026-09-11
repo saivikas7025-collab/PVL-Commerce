@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'config/api_config.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -58,7 +59,7 @@ class _LoginPageState extends State<LoginPage> {
     try {
       // ✅ CORRECT endpoint: /api/auth/login
       final response = await http.post(
-        Uri.parse('http://localhost:5000/api/auth/login'),
+        Uri.parse('${ApiConfig.baseUrl}/auth/login'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'phone': _phoneController.text.trim(),
@@ -158,8 +159,8 @@ class AdminDashboard extends StatefulWidget {
 }
 
 class _AdminDashboardState extends State<AdminDashboard> {
-  final String _apiBase = 'http://localhost:5000/api';
-  final String _socketBase = 'http://localhost:5000';
+  final String _apiBase = ApiConfig.baseUrl;
+  final String _socketBase = ApiConfig.socketUrl;
   late IO.Socket _socket;
 
   List<dynamic> _orders = [];
@@ -1076,7 +1077,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     try {
       // Use admin endpoint first
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/admin/order/${widget.orderId}'),
+        Uri.parse('${ApiConfig.baseUrl}/admin/order/${widget.orderId}'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
       if (response.statusCode == 200) {
@@ -1088,7 +1089,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       }
       // Fallback to delivery endpoint if admin endpoint not available
       final fallback = await http.get(
-        Uri.parse('http://localhost:5000/api/delivery/order/${widget.orderId}'),
+        Uri.parse('${ApiConfig.baseUrl}/delivery/order/${widget.orderId}'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
       if (fallback.statusCode == 200) {
@@ -1107,7 +1108,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   Future<void> _fetchLocation() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:5000/api/live-location/${widget.orderId}'),
+        Uri.parse('${ApiConfig.baseUrl}/live-location/${widget.orderId}'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
       if (response.statusCode == 200) {

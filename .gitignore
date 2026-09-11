@@ -23,3 +23,6 @@ yarn-error.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Allow production env template to be committed
+!backend/.env.production.example

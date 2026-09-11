@@ -1,16 +1,17 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'config/api_config.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 // ---------- CONFIGURATION ----------
-const String apiBase = 'http://localhost:5000/api';
-const String socketBase = 'http://localhost:5000';
+final String apiBase = ApiConfig.baseUrl;
+final String socketBase = ApiConfig.socketUrl;
 
 // ---------- MAIN ----------
 void main() => runApp(const PVLDeliveryApp());
