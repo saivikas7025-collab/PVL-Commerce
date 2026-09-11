@@ -1,0 +1,928 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+void main() => runApp(const PVLCommerceApp());
+
+// ============================================================
+// PVL-COMMERCE CUSTOMER MVP
+// Local/demo data only. Backend, OTP, maps and payments come later.
+// ============================================================
+
+
+const darkGreen = Color(0xFF176B2B);
+const lightGreen = Color(0xFFEAF7ED);
+const background = Color(0xFFF7F8F6);
+
+
+const borderGrey = Color(0xFFE3E7E3);
+
+const Color primaryGreen = Color(0xFF16A34A);
+const Color textDark = Color(0xFF111827);
+const Color textGrey = Color(0xFF6B7280);
+
+ButtonStyle buttonStyle() {
+  return ElevatedButton.styleFrom(
+    backgroundColor: primaryGreen,
+    foregroundColor: Colors.white,
+    elevation: 0,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+    ),
+    padding: const EdgeInsets.symmetric(
+      horizontal: 18,
+      vertical: 14,
+    ),
+  );
+}
+
+class Product {
+  final int id;
+  final String name;
+  final String description;
+  final int price;
+  final int mrp;
+  final String unit;
+  final String category;
+  final IconData icon;
+  final double rating;
+  final int delivery;
+  final int stock;
+
+  const Product({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.price,
+    required this.mrp,
+    required this.unit,
+    required this.category,
+    required this.icon,
+    required this.rating,
+    required this.delivery,
+    required this.stock,
+  });
+
+  int get discount => mrp > 0 ? ((mrp - price) * 100 ~/ mrp) : 0;
+
+  factory Product.fromJson(Map<String, dynamic> json) {
+    final category = (json['category_name'] ?? 'Other').toString();
+    return Product(
+      id: int.tryParse(json['id'].toString()) ?? 0,
+      name: (json['name'] ?? 'Product').toString(),
+      description: (json['description'] ?? '').toString(),
+      price: double.tryParse(json['price'].toString())?.round() ?? 0,
+      mrp: double.tryParse(json['original_price'].toString())?.round() ?? 0,
+      unit: (json['unit'] ?? '').toString(),
+      category: category,
+      icon: _iconForCategory(category),
+      rating: 4.5,
+      delivery: 30,
+      stock: 99,
+    );
+  }
+}
+
+IconData _iconForCategory(String category) {
+  switch (category.toLowerCase()) {
+    case 'fruits':
+      return Icons.eco_rounded;
+    case 'vegetables':
+      return Icons.local_florist_rounded;
+    case 'dairy':
+      return Icons.local_drink_rounded;
+    case 'bakery':
+      return Icons.bakery_dining_rounded;
+    case 'eggs':
+      return Icons.egg_alt_rounded;
+    case 'rice & grains':
+      return Icons.shopping_bag_rounded;
+    case 'beverages':
+      return Icons.local_drink_outlined;
+    case 'household':
+      return Icons.cleaning_services_rounded;
+    case 'personal care':
+      return Icons.spa_rounded;
+    default:
+      return Icons.shopping_basket_rounded;
+  }
+}
+
+List<Product> products = [];
+
+class Address {
+  String label;
+  String name;
+  String phone;
+  String house;
+  String street;
+  String landmark;
+  String city;
+  String state;
+  String pin;
+  bool isDefault;
+
+  Address({
+    required this.label,
+    required this.name,
+    required this.phone,
+    required this.house,
+    required this.street,
+    required this.landmark,
+    required this.city,
+    required this.state,
+    required this.pin,
+    this.isDefault = false,
+  });
+
+  String get fullAddress =>
+      '$house, $street${landmark.isEmpty ? '' : ', $landmark'}, $city, $state - $pin';
+}
+
+class OrderModel {
+  final String id;
+  final DateTime date;
+  final List<Product> products;
+  final Map<String, int> quantities;
+  final int total;
+  final Address address;
+  final String payment;
+  final String delivery;
+  String status;
+
+  OrderModel({
+    required this.id,
+    required this.date,
+    required this.products,
+    required this.quantities,
+    required this.total,
+    required this.address,
+    required this.payment,
+    required this.delivery,
+    required this.status,
+  });
+}
+
+const products = <Product>[
+  Product(name: 'Fresh Milk', price: 60, mrp: 65, unit: '500 ml', category: 'Dairy', icon: Icons.local_drink_rounded, rating: 4.6, delivery: 16, stock: 8),
+  Product(name: 'Fresh Bread', price: 45, mrp: 50, unit: '1 pack', category: 'Bakery', icon: Icons.bakery_dining_rounded, rating: 4.5, delivery: 16, stock: 6),
+  Product(name: 'Rice', price: 350, mrp: 390, unit: '5 kg', category: 'Groceries', icon: Icons.shopping_bag_rounded, rating: 4.7, delivery: 18, stock: 5),
+  Product(name: 'Biscuits', price: 30, mrp: 35, unit: '1 pack', category: 'Snacks', icon: Icons.cookie_rounded, rating: 4.4, delivery: 15, stock: 12),
+  Product(name: 'Soft Drink', price: 40, mrp: 45, unit: '750 ml', category: 'Drinks', icon: Icons.local_drink_outlined, rating: 4.3, delivery: 15, stock: 10),
+  Product(name: 'Dish Wash', price: 85, mrp: 99, unit: '500 ml', category: 'Cleaning', icon: Icons.cleaning_services_rounded, rating: 4.5, delivery: 17, stock: 7),
+  Product(name: 'Hand Wash', price: 70, mrp: 80, unit: '250 ml', category: 'Personal Care', icon: Icons.sanitizer_rounded, rating: 4.6, delivery: 16, stock: 9),
+  Product(name: 'Potato Chips', price: 35, mrp: 40, unit: '1 pack', category: 'Snacks', icon: Icons.fastfood_rounded, rating: 4.5, delivery: 15, stock: 15),
+  Product(name: 'Toor Dal', price: 145, mrp: 165, unit: '1 kg', category: 'Groceries', icon: Icons.rice_bowl_rounded, rating: 4.6, delivery: 18, stock: 5),
+  Product(name: 'Cooking Oil', price: 155, mrp: 175, unit: '1 L', category: 'Groceries', icon: Icons.water_drop_rounded, rating: 4.5, delivery: 18, stock: 6),
+  Product(name: 'Apples', price: 120, mrp: 140, unit: '1 kg', category: 'Fruits', icon: Icons.apple_rounded, rating: 4.7, delivery: 20, stock: 5),
+  Product(name: 'Bananas', price: 55, mrp: 65, unit: '1 dozen', category: 'Fruits', icon: Icons.eco_rounded, rating: 4.6, delivery: 20, stock: 8),
+];
+
+const categoryData = <Map<String, dynamic>>[
+  {'name': 'Fruits', 'icon': Icons.eco_rounded},
+  {'name': 'Vegetables', 'icon': Icons.local_florist_rounded},
+  {'name': 'Dairy', 'icon': Icons.local_drink_rounded},
+  {'name': 'Bakery', 'icon': Icons.bakery_dining_rounded},
+  {'name': 'Eggs', 'icon': Icons.egg_alt_rounded},
+  {'name': 'Rice & Grains', 'icon': Icons.shopping_bag_rounded},
+  {'name': 'Beverages', 'icon': Icons.local_drink_outlined},
+  {'name': 'Household', 'icon': Icons.cleaning_services_rounded},
+  {'name': 'Personal Care', 'icon': Icons.spa_rounded},
+];
+
+class PVLCommerceApp extends StatelessWidget {
+  const PVLCommerceApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'PVL-Commerce',
+      theme: ThemeData(
+        useMaterial3: true,
+        scaffoldBackgroundColor: background,
+        colorScheme: ColorScheme.fromSeed(seedColor: primaryGreen),
+      ),
+      home: const MainScreen(),
+    );
+  }
+}
+
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int tab = 0;
+  String category = 'All';
+  String search = '';
+  final cart = <String, int>{};
+  final favorites = <String>{};
+  final addresses = <Address>[
+    Address(label: 'Home', name: 'Sai Vikas', phone: '+91 98765 43210', house: '12-34', street: 'Example Street', landmark: 'Near Main Road', city: 'Kurnool', state: 'Andhra Pradesh', pin: '518001', isDefault: true),
+  ];
+  final orders = <OrderModel>[];
+  bool loadingProducts = true;
+  String productError = '';
+
+  @override
+  void initState() {
+    super.initState();
+    loadProducts();
+  }
+
+  Future<void> loadProducts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost:5000/api/products'),
+      );
+      if (response.statusCode != 200) {
+        throw Exception('Server returned ${response.statusCode}');
+      }
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final rows = (data['products'] as List<dynamic>? ?? []);
+      final loaded = rows
+          .map((item) => Product.fromJson(item as Map<String, dynamic>))
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        products = loaded;
+        loadingProducts = false;
+        productError = '';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        loadingProducts = false;
+        productError = 'Unable to load products. Please check that the backend is running.';
+      });
+    }
+  }
+
+  Widget productsSection() {
+    if (loadingProducts) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(30),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+    if (productError.isNotEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              const Icon(Icons.cloud_off_rounded, size: 42, color: textGrey),
+              const SizedBox(height: 8),
+              Text(productError, textAlign: TextAlign.center, style: const TextStyle(color: textGrey)),
+              const SizedBox(height: 10),
+              OutlinedButton(onPressed: () { setState(() { loadingProducts = true; productError = ''; }); loadProducts(); }, child: const Text('RETRY')),
+            ],
+          ),
+        ),
+      );
+    }
+    if (visibleProducts.isEmpty) {
+      return const EmptyState(icon: Icons.search_off_rounded, title: 'No products found', subtitle: 'Try another search or category');
+    }
+    return productGrid(visibleProducts);
+  }
+
+  int get cartCount => cart.values.fold(0, (a, b) => a + b);
+  int get subtotal => products.fold(0, (sum, p) => sum + p.price * (cart[p.name] ?? 0));
+  Address? get defaultAddress {
+    for (final a in addresses) { if (a.isDefault) return a; }
+    return addresses.isEmpty ? null : addresses.first;
+  }
+
+  List<Product> get visibleProducts => products.where((p) {
+    final c = category == 'All' || p.category == category;
+    final s = search.trim().isEmpty || p.name.toLowerCase().contains(search.toLowerCase());
+    return c && s;
+  }).toList();
+
+  void add(Product p) => setState(() => cart[p.name] = (cart[p.name] ?? 0) + 1);
+  void remove(Product p) => setState(() {
+    final q = cart[p.name] ?? 0;
+    if (q <= 1) { cart.remove(p.name); } else { cart[p.name] = q - 1; }
+  });
+
+  void openProduct(Product p) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ProductDetailsPage(
+      product: p,
+      quantity: cart[p.name] ?? 0,
+      favorite: favorites.contains(p.name),
+      onFavorite: () => setState(() {
+        if (!favorites.add(p.name)) favorites.remove(p.name);
+      }),
+      onAdd: () => add(p),
+      onRemove: () => remove(p),
+    )));
+  }
+
+  void openAddresses({bool fromCheckout = false}) async {
+    final result = await Navigator.push<Address>(context, MaterialPageRoute(builder: (_) => AddressPage(addresses: addresses)));
+    if (result != null) {
+      setState(() {
+        for (final a in addresses) { a.isDefault = false; }
+        result.isDefault = true;
+        if (!addresses.contains(result)) addresses.add(result);
+      });
+    }
+  }
+
+  void checkout() async {
+    if (cart.isEmpty) return;
+    final items = products.where((p) => (cart[p.name] ?? 0) > 0).toList();
+    final selected = defaultAddress;
+    final order = await Navigator.push<OrderModel>(context, MaterialPageRoute(builder: (_) => CheckoutPage(
+      products: items,
+      cart: Map<String, int>.from(cart),
+      address: selected,
+      addresses: addresses,
+    )));
+    if (order != null) {
+      setState(() {
+        orders.insert(0, order);
+        cart.clear();
+        tab = 3;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(index: tab, children: [home(), categoriesPage(), cartPage(), ordersPage(), profilePage()]),
+      bottomNavigationBar: NavigationBar(
+        height: 70,
+        selectedIndex: tab,
+        onDestinationSelected: (i) => setState(() => tab = i),
+        indicatorColor: lightGreen,
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded, color: primaryGreen), label: 'Home'),
+          const NavigationDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view_rounded, color: primaryGreen), label: 'Categories'),
+          NavigationDestination(icon: Badge(isLabelVisible: cartCount > 0, label: Text('$cartCount'), child: const Icon(Icons.shopping_cart_outlined)), selectedIcon: Badge(isLabelVisible: cartCount > 0, label: Text('$cartCount'), child: const Icon(Icons.shopping_cart_rounded, color: primaryGreen)), label: 'Cart'),
+          const NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long_rounded, color: primaryGreen), label: 'Orders'),
+          const NavigationDestination(icon: Icon(Icons.person_outline_rounded), selectedIcon: Icon(Icons.person_rounded, color: primaryGreen), label: 'Profile'),
+        ],
+      ),
+    );
+  }
+
+  Widget home() {
+    return SafeArea(child: Column(children: [
+      header(),
+      Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        searchBox(),
+        const SizedBox(height: 18),
+        SizedBox(height: 90, child: ListView(scrollDirection: Axis.horizontal, children: [
+          categoryChip('All', Icons.apps_rounded),
+          ...categoryData.map((c) => categoryChip(c['name'] as String, c['icon'] as IconData)),
+        ])),
+        const SizedBox(height: 15),
+        Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(gradient: const LinearGradient(colors: [darkGreen, Color(0xFF35A64C)]), borderRadius: BorderRadius.circular(20)), child: Row(children: [
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Fresh groceries', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)), SizedBox(height: 4), Text('Delivered to your doorstep', style: TextStyle(color: Colors.white70)), SizedBox(height: 12), Text('FREE DELIVERY ABOVE ₹199', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900))])),
+          const Icon(Icons.shopping_basket_rounded, color: Colors.white, size: 65),
+        ])),
+        const SizedBox(height: 20),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Popular products', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)), TextButton(onPressed: () => setState(() => tab = 1), child: const Text('View all'))]),
+        const SizedBox(height: 8),
+        productGrid(visibleProducts),
+      ]))),
+    ]));
+  }
+
+  Widget header() => Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(16, 10, 10, 10), child: Row(children: [
+    Container(width: 42, height: 42, decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(13)), child: const Icon(Icons.location_on_rounded, color: primaryGreen)),
+    const SizedBox(width: 10),
+    Expanded(child: GestureDetector(onTap: openAddresses, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('DELIVER TO', style: TextStyle(fontSize: 9, color: textGrey, fontWeight: FontWeight.w800)), const SizedBox(height: 2), Row(children: [Flexible(child: Text(defaultAddress?.city ?? 'Select location', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900))), const Icon(Icons.keyboard_arrow_down_rounded, size: 18)])]))),
+    IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsPage())), icon: const Icon(Icons.notifications_none_rounded)),
+    Stack(children: [IconButton(onPressed: () => setState(() => tab = 2), icon: const Icon(Icons.shopping_cart_outlined)), if (cartCount > 0) Positioned(right: 4, top: 2, child: CircleAvatar(radius: 8, backgroundColor: primaryGreen, child: Text('$cartCount', style: const TextStyle(color: Colors.white, fontSize: 8))))]),
+  ]));
+
+  Widget searchBox() => Container(height: 52, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: borderGrey)), child: TextField(onChanged: (v) => setState(() => search = v), decoration: const InputDecoration(border: InputBorder.none, prefixIcon: Icon(Icons.search_rounded), hintText: 'Search products, groceries and more')));
+
+  Widget categoryChip(String name, IconData icon) => GestureDetector(onTap: () => setState(() => category = name), child: Container(width: 76, margin: const EdgeInsets.only(right: 10), child: Column(children: [Container(width: 62, height: 62, decoration: BoxDecoration(color: category == name ? lightGreen : Colors.white, border: Border.all(color: category == name ? primaryGreen : borderGrey), borderRadius: BorderRadius.circular(18)), child: Icon(icon, color: category == name ? primaryGreen : textGrey)), const SizedBox(height: 6), Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700))])));
+
+  Widget productGrid(List<Product> list) => LayoutBuilder(builder: (context, box) {
+    final columns = box.maxWidth >= 1000 ? 4 : box.maxWidth >= 700 ? 3 : 2;
+    return GridView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: list.length, gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, crossAxisSpacing: 10, mainAxisSpacing: 12, mainAxisExtent: 310), itemBuilder: (_, i) {
+      final p = list[i];
+      return ProductCard(product: p, quantity: cart[p.name] ?? 0, favorite: favorites.contains(p.name), onTap: () => openProduct(p), onAdd: () => add(p), onRemove: () => remove(p), onFavorite: () => setState(() { if (!favorites.add(p.name)) favorites.remove(p.name); }));
+    });
+  });
+
+  Widget categoriesPage() => SafeArea(child: Column(children: [pageHeader('Categories', 'Shop everything you need'), Expanded(child: GridView.builder(padding: const EdgeInsets.all(16), itemCount: categoryData.length, gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12, mainAxisExtent: 135), itemBuilder: (_, i) { final c = categoryData[i]; return InkWell(onTap: () { setState(() { category = c['name'] as String; tab = 0; }); }, borderRadius: BorderRadius.circular(18), child: Container(decoration: cardDecoration(), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Container(width: 56, height: 56, decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(16)), child: Icon(c['icon'] as IconData, color: primaryGreen)), const SizedBox(height: 8), Text(c['name'] as String, style: const TextStyle(fontWeight: FontWeight.w800))]))); }))]));
+
+  Widget cartPage() {
+    final items = products.where((p) => (cart[p.name] ?? 0) > 0).toList();
+    return SafeArea(child: Column(children: [pageHeader('Your Cart', '$cartCount items'), if (items.isEmpty) const Expanded(child: EmptyState(icon: Icons.shopping_cart_outlined, title: 'Your cart is empty', subtitle: 'Add products to get started')) else Expanded(child: Column(children: [Expanded(child: ListView.builder(padding: const EdgeInsets.all(16), itemCount: items.length, itemBuilder: (_, i) => cartItem(items[i])),), cartSummary()]))]));
+  }
+
+  Widget cartItem(Product p) => Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(10), decoration: cardDecoration(), child: Row(children: [Container(width: 68, height: 68, decoration: BoxDecoration(color: const Color(0xFFF3F5F2), borderRadius: BorderRadius.circular(13)), child: Icon(p.icon, color: textGrey, size: 32)), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(p.name, style: const TextStyle(fontWeight: FontWeight.w900)), Text(p.unit, style: const TextStyle(color: textGrey, fontSize: 11)), const SizedBox(height: 4), Text('₹${p.price}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16))])), quantityControl(p)]));
+
+  Widget quantityControl(Product p) => Container(height: 34, decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(9), border: Border.all(color: primaryGreen)), child: Row(mainAxisSize: MainAxisSize.min, children: [IconButton(onPressed: () => remove(p), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 32), icon: const Icon(Icons.remove, size: 16, color: primaryGreen)), Text('${cart[p.name] ?? 0}', style: const TextStyle(fontWeight: FontWeight.w900, color: primaryGreen)), IconButton(onPressed: () => add(p), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 32), icon: const Icon(Icons.add, size: 16, color: primaryGreen))]));
+
+  Widget cartSummary() { final fee = subtotal >= 199 ? 0 : 25; final discount = subtotal >= 500 ? 50 : 0; final total = subtotal + fee - discount; return Container(padding: const EdgeInsets.fromLTRB(16, 13, 16, 15), decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 15, offset: const Offset(0, -3))]), child: Column(children: [_billRow('Subtotal', '₹$subtotal'), _billRow('Delivery', fee == 0 ? 'FREE' : '₹$fee', color: fee == 0 ? primaryGreen : textDark), if (discount > 0) _billRow('Discount', '-₹$discount', color: primaryGreen), const Divider(height: 18), _billRow('Total', '₹$total', large: true), const SizedBox(height: 10), SizedBox(width: double.infinity, height: 50, child: ElevatedButton(onPressed: checkout, style: buttonStyle(), child: const Text('Proceed to Checkout')))])); }
+
+  Widget ordersPage() => SafeArea(child: Column(children: [pageHeader('My Orders', '${orders.length} order${orders.length == 1 ? '' : 's'}'), Expanded(child: orders.isEmpty ? const EmptyState(icon: Icons.receipt_long_outlined, title: 'No orders yet', subtitle: 'Your completed orders will appear here') : ListView.builder(padding: const EdgeInsets.all(16), itemCount: orders.length, itemBuilder: (_, i) => orderTile(orders[i])))]));
+
+  Widget orderTile(OrderModel o) => Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(15), decoration: cardDecoration(), child: Column(children: [Row(children: [Container(width: 45, height: 45, decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.shopping_bag_rounded, color: primaryGreen)), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(o.id, style: const TextStyle(fontWeight: FontWeight.w900)), const SizedBox(height: 3), Text('${o.products.length} item(s) • ${o.payment}', style: const TextStyle(color: textGrey, fontSize: 11))])), Text('₹${o.total}', style: const TextStyle(fontWeight: FontWeight.w900))]), const SizedBox(height: 12), Row(children: [Expanded(child: Text(o.status, style: const TextStyle(color: primaryGreen, fontWeight: FontWeight.w800))), TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => OrderTrackingPage(order: o))), child: const Text('Track')), ElevatedButton(onPressed: () { for (final p in o.products) { cart[p.name] = (cart[p.name] ?? 0) + (o.quantities[p.name] ?? 0); } setState(() => tab = 2); }, style: buttonStyle(), child: const Text('Shop Again'))]) ]));
+
+  Widget profilePage() {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: cardDecoration(),
+              child: Column(
+                children: [
+                  const CircleAvatar(
+                    radius: 38,
+                    backgroundColor: lightGreen,
+                    child: Icon(Icons.person_rounded, color: primaryGreen, size: 42),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('Welcome to PVL-Commerce', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 4),
+                  const Text('Login to manage your account', style: TextStyle(color: textGrey)),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: ElevatedButton(onPressed: loginDialog, style: buttonStyle(), child: const Text('Login / Sign Up')),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            profileOption(Icons.location_on_outlined, 'My Addresses', 'Manage delivery addresses', openAddresses),
+            profileOption(Icons.favorite_border_rounded, 'Wishlist', '${favorites.length} saved products', () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => WishlistPage(
+                favorites: favorites,
+                onRemove: (n) => setState(() => favorites.remove(n)),
+                onAdd: add,
+              )));
+            }),
+            profileOption(Icons.notifications_none_rounded, 'Notifications', 'Offers and order updates', () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsPage()));
+            }),
+            profileOption(Icons.help_outline_rounded, 'Help & Support', 'Get help with your orders', helpDialog),
+            profileOption(Icons.info_outline_rounded, 'About PVL-Commerce', 'Version 1.0.0', () {
+              showAboutDialog(context: context, applicationName: 'PVL-Commerce', applicationVersion: '1.0.0');
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget profileOption(IconData icon, String title, String sub, VoidCallback onTap) => Container(margin: const EdgeInsets.only(bottom: 10), decoration: cardDecoration(), child: ListTile(onTap: onTap, leading: Container(width: 44, height: 44, decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: primaryGreen)), title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)), subtitle: Text(sub, style: const TextStyle(color: textGrey, fontSize: 11)), trailing: const Icon(Icons.chevron_right_rounded)));
+
+  Widget pageHeader(String title, String sub) => Container(color: Colors.white, padding: const EdgeInsets.fromLTRB(16, 15, 16, 14), child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w900)), Text(sub, style: const TextStyle(color: textGrey, fontSize: 11))]))]));
+
+  Widget _billRow(String a, String b, {Color? color, bool large = false}) => Row(children: [Expanded(child: Text(a, style: TextStyle(color: large ? textDark : textGrey, fontSize: large ? 15 : 12, fontWeight: large ? FontWeight.w900 : FontWeight.w500))), Text(b, style: TextStyle(color: color ?? textDark, fontSize: large ? 18 : 12, fontWeight: FontWeight.w900))]);
+
+  BoxDecoration cardDecoration() => BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey));
+  ButtonStyle buttonStyle() => ElevatedButton.styleFrom(backgroundColor: primaryGreen, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)));
+
+  void loginDialog() { final c = TextEditingController(); showDialog(context: context, builder: (_) => AlertDialog(title: const Text('Login / Sign Up'), content: TextField(controller: c, keyboardType: TextInputType.phone, decoration: const InputDecoration(prefixText: '+91 ', hintText: 'Mobile number', border: OutlineInputBorder())), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), ElevatedButton(onPressed: () { Navigator.pop(context); ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(content: Text('OTP flow will be connected to the backend next.'))); }, child: const Text('Send OTP'))])); }
+  void helpDialog() { showDialog(context: context, builder: (_) => AlertDialog(title: const Text('Help & Support'), content: const Text('For the MVP, support is shown here. Later this will connect to chat, tickets and order-specific support.'), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))])); }
+}
+
+class ProductCard extends StatelessWidget {
+  final Product product; final int quantity; final bool favorite; final VoidCallback onTap, onAdd, onRemove, onFavorite;
+  const ProductCard({super.key, required this.product, required this.quantity, required this.favorite, required this.onTap, required this.onAdd, required this.onRemove, required this.onFavorite});
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: 135,
+              child: Stack(
+                children: [
+                  Center(child: Container(width: 94, height: 94, decoration: BoxDecoration(color: const Color(0xFFF3F5F2), borderRadius: BorderRadius.circular(18)), child: Icon(product.icon, size: 55, color: textGrey))),
+                  if (product.discount > 0)
+                    Positioned(left: 8, top: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4), decoration: BoxDecoration(color: primaryGreen, borderRadius: BorderRadius.circular(7)), child: Text('${product.discount}% OFF', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900)))),
+                  Positioned(right: 5, top: 5, child: IconButton(onPressed: onFavorite, icon: Icon(favorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: favorite ? Colors.redAccent : textDark), iconSize: 19)),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 9),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(product.unit, style: const TextStyle(color: textGrey, fontSize: 10)),
+                  const SizedBox(height: 3),
+                  Text(product.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                  const SizedBox(height: 5),
+                  Row(children: [Text('₹${product.price}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)), const SizedBox(width: 5), Text('₹${product.mrp}', style: const TextStyle(color: textGrey, fontSize: 10, decoration: TextDecoration.lineThrough))]),
+                  const SizedBox(height: 5),
+                  Row(children: [const Icon(Icons.star_rounded, size: 14, color: Color(0xFFF3B51B)), const SizedBox(width: 2), Text('${product.rating}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700)), const Spacer(), Text('${product.delivery} min', style: const TextStyle(color: textGrey, fontSize: 9))]),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 34,
+                    width: double.infinity,
+                    child: quantity == 0
+                        ? OutlinedButton(onPressed: onAdd, style: OutlinedButton.styleFrom(foregroundColor: primaryGreen, side: const BorderSide(color: primaryGreen), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)), padding: EdgeInsets.zero), child: const Text('ADD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)))
+                        : Container(decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(9), border: Border.all(color: primaryGreen)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [IconButton(onPressed: onRemove, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 34), icon: const Icon(Icons.remove, size: 15, color: primaryGreen)), Text('$quantity', style: const TextStyle(color: primaryGreen, fontWeight: FontWeight.w900)), IconButton(onPressed: onAdd, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 34), icon: const Icon(Icons.add, size: 15, color: primaryGreen))])),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProductDetailsPage extends StatelessWidget {
+  final Product product; final int quantity; final bool favorite; final VoidCallback onFavorite, onAdd, onRemove;
+  const ProductDetailsPage({super.key, required this.product, required this.quantity, required this.favorite, required this.onFavorite, required this.onAdd, required this.onRemove});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Product Details', style: TextStyle(fontWeight: FontWeight.w900)),
+        actions: [IconButton(onPressed: onFavorite, icon: Icon(favorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: favorite ? Colors.redAccent : textDark))],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 100),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(height: 270, width: double.infinity, color: Colors.white, child: Center(child: Container(width: 190, height: 190, decoration: BoxDecoration(color: const Color(0xFFF3F5F2), borderRadius: BorderRadius.circular(30)), child: Icon(product.icon, size: 110, color: textGrey)))),
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(product.category, style: const TextStyle(color: primaryGreen, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 6),
+                  Text(product.name, style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w900)),
+                  Text(product.unit, style: const TextStyle(color: textGrey)),
+                  const SizedBox(height: 12),
+                  Row(children: [Text('₹${product.price}', style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w900)), const SizedBox(width: 8), Text('₹${product.mrp}', style: const TextStyle(color: textGrey, decoration: TextDecoration.lineThrough))]),
+                  const SizedBox(height: 14),
+                  Row(children: [Chip(avatar: const Icon(Icons.star_rounded, size: 16, color: Color(0xFFF3B51B)), label: Text('${product.rating}')), const SizedBox(width: 8), Chip(avatar: const Icon(Icons.schedule_rounded, size: 16), label: Text('${product.delivery} min'))]),
+                  const SizedBox(height: 12),
+                  const Divider(),
+                  const SizedBox(height: 10),
+                  const Text('About this product', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 7),
+                  Text('Fresh and carefully selected ${product.name.toLowerCase()} from trusted local stores. Quality products delivered conveniently to your doorstep.', style: const TextStyle(color: textGrey, height: 1.5)),
+                  const SizedBox(height: 18),
+                  Container(width: double.infinity, padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(14)), child: const Row(children: [Icon(Icons.delivery_dining_rounded, color: primaryGreen, size: 30), SizedBox(width: 10), Expanded(child: Text('Fast local delivery with live order updates.', style: TextStyle(fontWeight: FontWeight.w800)))])),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          color: Colors.white,
+          child: Row(
+            children: [
+              if (quantity > 0)
+                Container(height: 50, decoration: BoxDecoration(color: lightGreen, border: Border.all(color: primaryGreen), borderRadius: BorderRadius.circular(12)), child: Row(children: [IconButton(onPressed: onRemove, icon: const Icon(Icons.remove, color: primaryGreen)), Text('$quantity', style: const TextStyle(color: primaryGreen, fontWeight: FontWeight.w900)), IconButton(onPressed: onAdd, icon: const Icon(Icons.add, color: primaryGreen))]))
+              else
+                OutlinedButton(onPressed: onAdd, style: OutlinedButton.styleFrom(foregroundColor: primaryGreen, side: const BorderSide(color: primaryGreen), fixedSize: const Size(75, 50)), child: const Text('ADD')),
+              const SizedBox(width: 10),
+              Expanded(child: ElevatedButton(onPressed: onAdd, style: buttonStyle().copyWith(minimumSize: const WidgetStatePropertyAll(Size.fromHeight(50))), child: const Text('Add to Cart'))),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AddressPage extends StatefulWidget {
+  final List<Address> addresses;
+  const AddressPage({super.key, required this.addresses});
+  @override State<AddressPage> createState() => _AddressPageState();
+}
+class _AddressPageState extends State<AddressPage> {
+  Address? selected;
+  @override void initState() { super.initState(); selected = widget.addresses.where((a) => a.isDefault).firstOrNull ?? (widget.addresses.isEmpty ? null : widget.addresses.first); }
+  void addEdit([Address? old]) async {
+    final result = await Navigator.push<Address>(context, MaterialPageRoute(builder: (_) => AddressFormPage(address: old)));
+    if (result == null) return;
+    setState(() { if (old != null) { final i = widget.addresses.indexOf(old); if (i >= 0) widget.addresses[i] = result; } else { widget.addresses.add(result); } if (result.isDefault) for (final a in widget.addresses) { if (a != result) a.isDefault = false; } selected = result; });
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Delivery Address', style: TextStyle(fontWeight: FontWeight.w900))),
+      body: widget.addresses.isEmpty
+          ? const EmptyState(icon: Icons.location_on_outlined, title: 'No saved addresses', subtitle: 'Add an address to continue')
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                for (final a in widget.addresses) addressCard(a),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(onPressed: addEdit, icon: const Icon(Icons.add), label: const Text('Add New Address')),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location permission and maps will be connected next.'))), icon: const Icon(Icons.my_location_rounded), label: const Text('Use Current Location')),
+              ],
+            ),
+      bottomNavigationBar: SafeArea(child: Padding(padding: const EdgeInsets.all(14), child: ElevatedButton(onPressed: selected == null ? null : () => Navigator.pop(context, selected), style: buttonStyle(), child: const Text('Deliver to This Address')))),
+    );
+  }
+  Widget addressCard(Address a) {
+    return GestureDetector(
+      onTap: () => setState(() => selected = a),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: selected == a ? primaryGreen : borderGrey, width: selected == a ? 1.5 : 1)),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(a.label == 'Work' ? Icons.business_rounded : Icons.home_rounded, color: primaryGreen),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [Text(a.label.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11)), if (a.isDefault) Container(margin: const EdgeInsets.only(left: 7), padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(5)), child: const Text('DEFAULT', style: TextStyle(color: primaryGreen, fontSize: 8, fontWeight: FontWeight.w900))), const Spacer(), PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') addEdit(a); if (v == 'delete') setState(() { widget.addresses.remove(a); if (selected == a) selected = widget.addresses.isEmpty ? null : widget.addresses.first; }); }, itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))])]),
+              Text(a.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 3),
+              Text(a.fullAddress, style: const TextStyle(color: textGrey, fontSize: 12, height: 1.4)),
+              Text(a.phone, style: const TextStyle(color: textGrey, fontSize: 11)),
+            ])),
+            Radio<Address>(value: a, groupValue: selected, activeColor: primaryGreen, onChanged: (v) => setState(() => selected = v)),
+          ],
+        ),
+      ),
+    );
+  }
+  ButtonStyle buttonStyle() => ElevatedButton.styleFrom(backgroundColor: primaryGreen, foregroundColor: Colors.white, elevation: 0, minimumSize: const Size.fromHeight(50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)));
+}
+
+class AddressFormPage extends StatefulWidget {
+  final Address? address;
+  const AddressFormPage({super.key, this.address});
+  @override State<AddressFormPage> createState() => _AddressFormPageState();
+}
+class _AddressFormPageState extends State<AddressFormPage> {
+  late final TextEditingController name, phone, house, street, landmark, city, state, pin;
+  String label = 'Home'; bool defaultAddress = false;
+  @override void initState() { super.initState(); final a = widget.address; name = TextEditingController(text: a?.name ?? ''); phone = TextEditingController(text: a?.phone ?? ''); house = TextEditingController(text: a?.house ?? ''); street = TextEditingController(text: a?.street ?? ''); landmark = TextEditingController(text: a?.landmark ?? ''); city = TextEditingController(text: a?.city ?? 'Kurnool'); state = TextEditingController(text: a?.state ?? 'Andhra Pradesh'); pin = TextEditingController(text: a?.pin ?? ''); label = a?.label ?? 'Home'; defaultAddress = a?.isDefault ?? false; }
+  @override void dispose() { for (final c in [name, phone, house, street, landmark, city, state, pin]) { c.dispose(); } super.dispose(); }
+  void save() { if ([name, phone, house, street, city, state, pin].any((c) => c.text.trim().isEmpty)) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please complete all required fields.'))); return; } if (phone.text.replaceAll(RegExp(r'\D'), '').length < 10 || pin.text.replaceAll(RegExp(r'\D'), '').length != 6) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a valid mobile number and 6-digit PIN code.'))); return; } Navigator.pop(context, Address(label: label, name: name.text.trim(), phone: phone.text.trim(), house: house.text.trim(), street: street.text.trim(), landmark: landmark.text.trim(), city: city.text.trim(), state: state.text.trim(), pin: pin.text.trim(), isDefault: defaultAddress)); }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.address == null ? 'Add New Address' : 'Edit Address', style: const TextStyle(fontWeight: FontWeight.w900))),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Location', style: sectionStyle()),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Map picker will be connected next.'))), icon: const Icon(Icons.location_on_outlined), label: const Text('Search location / Use current location')),
+          const SizedBox(height: 18),
+          Text('Address details', style: sectionStyle()),
+          const SizedBox(height: 8),
+          field(name, 'Full Name', Icons.person_outline),
+          field(phone, 'Mobile Number', Icons.phone_outlined, type: TextInputType.phone),
+          field(house, 'House / Flat / Building', Icons.home_outlined),
+          field(street, 'Street / Area', Icons.route_outlined),
+          field(landmark, 'Landmark (Optional)', Icons.place_outlined),
+          field(city, 'City', Icons.location_city_outlined),
+          field(state, 'State', Icons.map_outlined),
+          field(pin, 'PIN Code', Icons.pin_drop_outlined, type: TextInputType.number),
+          const SizedBox(height: 10),
+          Text('Save address as', style: sectionStyle()),
+          const SizedBox(height: 8),
+          Row(children: ['Home', 'Work', 'Other'].map((x) => Expanded(child: Padding(padding: const EdgeInsets.only(right: 6), child: ChoiceChip(label: Text(x), selected: label == x, onSelected: (_) => setState(() => label = x))))).toList()),
+          SwitchListTile(contentPadding: EdgeInsets.zero, value: defaultAddress, activeColor: primaryGreen, onChanged: (v) => setState(() => defaultAddress = v), title: const Text('Make this my default address', style: TextStyle(fontWeight: FontWeight.w700))),
+          const SizedBox(height: 14),
+          ElevatedButton(onPressed: save, style: ElevatedButton.styleFrom(backgroundColor: primaryGreen, foregroundColor: Colors.white, minimumSize: const Size.fromHeight(52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13))), child: const Text('SAVE ADDRESS', style: TextStyle(fontWeight: FontWeight.w900))),
+        ],
+      ),
+    );
+  }
+  TextStyle sectionStyle() => const TextStyle(fontSize: 16, fontWeight: FontWeight.w900);
+  Widget field(TextEditingController c, String hint, IconData icon, {TextInputType? type}) => Padding(padding: const EdgeInsets.only(bottom: 10), child: TextField(controller: c, keyboardType: type, decoration: InputDecoration(prefixIcon: Icon(icon), labelText: hint, border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))));
+}
+
+class CheckoutPage extends StatefulWidget {
+  final List<Product> products; final Map<String, int> cart; final Address? address; final List<Address> addresses;
+  const CheckoutPage({super.key, required this.products, required this.cart, required this.address, required this.addresses});
+  @override State<CheckoutPage> createState() => _CheckoutPageState();
+}
+class _CheckoutPageState extends State<CheckoutPage> {
+  Address? address; String payment = 'UPI'; String delivery = 'Standard';
+  @override void initState() { super.initState(); address = widget.address; }
+  int get subtotal => widget.products.fold(0, (s, p) => s + p.price * (widget.cart[p.name] ?? 0));
+  int get fee => delivery == 'Express' ? 39 : subtotal >= 199 ? 0 : 25;
+  int get discount => subtotal >= 500 ? 50 : 0;
+  int get total => subtotal + fee - discount;
+  Future<void> chooseAddress() async { final a = await Navigator.push<Address>(context, MaterialPageRoute(builder: (_) => AddressPage(addresses: widget.addresses))); if (a != null) setState(() => address = a); }
+  void placeOrder() { if (address == null) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a delivery address.'))); return; } final id = '#PVL${1000 + DateTime.now().millisecond}'; final o = OrderModel(id: id, date: DateTime.now(), products: widget.products, quantities: widget.cart, total: total, address: address!, payment: payment, delivery: delivery, status: 'Order confirmed'); Navigator.push(context, MaterialPageRoute(builder: (_) => OrderConfirmationPage(order: o))).then((_) => Navigator.pop(context, o)); }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Checkout', style: TextStyle(fontWeight: FontWeight.w900))),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text('Delivery address', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 8),
+          GestureDetector(onTap: chooseAddress, child: Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey)), child: Row(children: [const Icon(Icons.home_rounded, color: primaryGreen), const SizedBox(width: 10), Expanded(child: Text(address == null ? 'Add delivery address' : '${address!.name}\n${address!.fullAddress}', style: const TextStyle(fontSize: 12, height: 1.4, fontWeight: FontWeight.w600))), const Text('CHANGE', style: TextStyle(color: primaryGreen, fontSize: 10, fontWeight: FontWeight.w900))]))),
+          const SizedBox(height: 20),
+          const Text('Delivery option', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+          option('Standard', '30–60 minutes', fee == 0 ? 'FREE' : '₹25', Icons.local_shipping_outlined),
+          option('Express', '15–30 minutes', '₹39', Icons.bolt_rounded),
+          const SizedBox(height: 20),
+          const Text('Order items', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+          Container(
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey)),
+            child: Column(
+              children: [
+                for (final p in widget.products)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Container(width: 48, height: 48, decoration: BoxDecoration(color: const Color(0xFFF3F5F2), borderRadius: BorderRadius.circular(10)), child: Icon(p.icon, color: textGrey)),
+                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
+                    subtitle: Text('${p.unit} × ${widget.cart[p.name]}'),
+                    trailing: Text('₹${p.price * (widget.cart[p.name] ?? 0)}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text('Payment method', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+          optionPayment('UPI', 'Google Pay, PhonePe, Paytm and more', Icons.account_balance_wallet_outlined),
+          optionPayment('Cash on delivery', 'Pay when your order arrives', Icons.payments_outlined),
+          optionPayment('Card', 'Credit or debit card', Icons.credit_card_outlined),
+          const SizedBox(height: 20),
+          const Text('Bill details', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+          Container(margin: const EdgeInsets.only(top: 8), padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey)), child: Column(children: [_row('Item total', '₹$subtotal'), _row('Delivery', fee == 0 ? 'FREE' : '₹$fee', color: fee == 0 ? primaryGreen : textDark), if (discount > 0) _row('Discount', '-₹$discount', color: primaryGreen), const Divider(height: 20), _row('Total', '₹$total', large: true)])),
+          const SizedBox(height: 20),
+        ],
+      ),
+      bottomNavigationBar: SafeArea(child: Padding(padding: const EdgeInsets.all(14), child: Row(children: [Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [const Text('Total', style: TextStyle(color: textGrey, fontSize: 10)), Text('₹$total', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900))]), const SizedBox(width: 15), Expanded(child: ElevatedButton(onPressed: placeOrder, style: buttonStyle(), child: const Text('PLACE ORDER', style: TextStyle(fontWeight: FontWeight.w900))))]))),
+    );
+  }
+  Widget option(String value, String sub, String price, IconData icon) {
+    return GestureDetector(
+      onTap: () => setState(() => delivery = value),
+      child: Container(margin: const EdgeInsets.only(top: 8), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: delivery == value ? primaryGreen : borderGrey, width: delivery == value ? 1.5 : 1)), child: Row(children: [Icon(icon, color: primaryGreen), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(value == 'Standard' ? 'Standard delivery' : 'Express delivery', style: const TextStyle(fontWeight: FontWeight.w800)), Text(sub, style: const TextStyle(color: textGrey, fontSize: 10))])), Text(price, style: const TextStyle(fontWeight: FontWeight.w900)), Radio<String>(value: value, groupValue: delivery, activeColor: primaryGreen, onChanged: (v) => setState(() => delivery = v!))])),
+    );
+  }
+  Widget optionPayment(String value, String sub, IconData icon) {
+    return GestureDetector(
+      onTap: () => setState(() => payment = value),
+      child: Container(margin: const EdgeInsets.only(top: 8), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: payment == value ? primaryGreen : borderGrey, width: payment == value ? 1.5 : 1)), child: Row(children: [Icon(icon, color: primaryGreen), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(value, style: const TextStyle(fontWeight: FontWeight.w800)), Text(sub, style: const TextStyle(color: textGrey, fontSize: 10))])), Radio<String>(value: value, groupValue: payment, activeColor: primaryGreen, onChanged: (v) => setState(() => payment = v!))])),
+    );
+  }
+  Widget _row(String a, String b, {Color? color, bool large = false}) => Row(children: [Expanded(child: Text(a, style: TextStyle(color: large ? textDark : textGrey, fontWeight: large ? FontWeight.w900 : FontWeight.w500))), Text(b, style: TextStyle(color: color ?? textDark, fontWeight: FontWeight.w900, fontSize: large ? 18 : 12))]);
+}
+
+class OrderConfirmationPage extends StatelessWidget {
+  final OrderModel order;
+  const OrderConfirmationPage({super.key, required this.order});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(width: 90, height: 90, decoration: const BoxDecoration(color: lightGreen, shape: BoxShape.circle), child: const Icon(Icons.check_rounded, color: primaryGreen, size: 55)),
+                const SizedBox(height: 20),
+                const Text('Order Confirmed!', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 8),
+                Text(order.id, style: const TextStyle(color: primaryGreen, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 10),
+                Text('Your order of ₹${order.total} has been placed successfully. Estimated delivery: ${order.delivery == 'Express' ? '15–30' : '30–60'} minutes.', textAlign: TextAlign.center, style: const TextStyle(color: textGrey, height: 1.5)),
+                const SizedBox(height: 24),
+                Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey)), child: Column(children: [Text(order.address.fullAddress, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, height: 1.4)), const SizedBox(height: 8), Text('Payment: ${order.payment}', style: const TextStyle(color: textGrey, fontSize: 11))])),
+                const SizedBox(height: 20),
+                SizedBox(width: double.infinity, height: 50, child: ElevatedButton(onPressed: () => Navigator.pop(context), style: buttonStyle(), child: const Text('CONTINUE'))),
+                const SizedBox(height: 8),
+                TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => OrderTrackingPage(order: order))), child: const Text('Track Order')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class OrderTrackingPage extends StatefulWidget {
+  final OrderModel order;
+  const OrderTrackingPage({super.key, required this.order});
+  @override State<OrderTrackingPage> createState() => _OrderTrackingPageState();
+}
+class _OrderTrackingPageState extends State<OrderTrackingPage> {
+  int step = 1;
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Track Order', style: TextStyle(fontWeight: FontWeight.w900))), body: ListView(padding: const EdgeInsets.all(16), children: [Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(gradient: const LinearGradient(colors: [darkGreen, primaryGreen]), borderRadius: BorderRadius.circular(18)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(widget.order.id, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)), const SizedBox(height: 8), const Text('Arriving soon', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)), Text(widget.order.delivery == 'Express' ? '15–30 minutes' : '30–60 minutes', style: const TextStyle(color: Colors.white70))])), const SizedBox(height: 18), Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: borderGrey)), child: Column(children: [_trackStep('Order placed', 'We received your order', Icons.receipt_long_rounded, true), _trackStep('Store preparing', 'Your items are being packed', Icons.inventory_2_rounded, step >= 1), _trackStep('Out for delivery', 'Delivery partner is on the way', Icons.delivery_dining_rounded, step >= 2), _trackStep('Delivered', 'Enjoy your order', Icons.check_circle_rounded, step >= 3)])), const SizedBox(height: 16), Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(15)), child: Row(children: [const Icon(Icons.location_on_rounded, color: primaryGreen), const SizedBox(width: 8), Expanded(child: Text(widget.order.address.fullAddress, style: const TextStyle(fontSize: 11, height: 1.4)))])), const SizedBox(height: 16), OutlinedButton(onPressed: () { setState(() { step = step >= 3 ? 1 : step + 1; }); }, child: const Text('SIMULATE NEXT STATUS'))]));
+  Widget _trackStep(String title, String sub, IconData icon, bool active) => Padding(padding: const EdgeInsets.only(bottom: 18), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(width: 42, height: 42, decoration: BoxDecoration(color: active ? lightGreen : const Color(0xFFF3F3F3), shape: BoxShape.circle), child: Icon(icon, color: active ? primaryGreen : textGrey, size: 21)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: TextStyle(fontWeight: FontWeight.w900, color: active ? textDark : textGrey)), const SizedBox(height: 3), Text(sub, style: const TextStyle(color: textGrey, fontSize: 11))]))]));
+}
+
+class WishlistPage extends StatelessWidget {
+  final Set<String> favorites; final ValueChanged<String> onRemove; final ValueChanged<Product> onAdd;
+  const WishlistPage({super.key, required this.favorites, required this.onRemove, required this.onAdd});
+  @override
+  Widget build(BuildContext context) {
+    final list = products.where((p) => favorites.contains(p.name)).toList();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Wishlist', style: TextStyle(fontWeight: FontWeight.w900))),
+      body: list.isEmpty
+          ? const EmptyState(icon: Icons.favorite_border_rounded, title: 'Your wishlist is empty', subtitle: 'Save products you love')
+          : GridView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: list.length,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 10, mainAxisSpacing: 10, mainAxisExtent: 280),
+              itemBuilder: (_, i) {
+                final p = list[i];
+                return Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey)),
+                  child: Column(
+                    children: [
+                      Expanded(child: Icon(p.icon, size: 65, color: textGrey)),
+                      Text(p.name, style: const TextStyle(fontWeight: FontWeight.w900)),
+                      Text(p.unit, style: const TextStyle(color: textGrey, fontSize: 10)),
+                      const SizedBox(height: 4),
+                      Text('₹${p.price}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(child: OutlinedButton(onPressed: () => onRemove(p.name), child: const Text('Remove'))),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                onAdd(p);
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Added to cart')));
+                              },
+                              style: ElevatedButton.styleFrom(backgroundColor: primaryGreen, foregroundColor: Colors.white),
+                              child: const Text('Add'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class NotificationsPage extends StatelessWidget {
+  const NotificationsPage({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notifications', style: TextStyle(fontWeight: FontWeight.w900))),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          notification(Icons.local_offer_rounded, 'Welcome offer', 'Get ₹50 off on orders above ₹500.'),
+          notification(Icons.delivery_dining_rounded, 'Fast delivery', 'Your local stores are ready for quick delivery.'),
+          notification(Icons.shopping_bag_rounded, 'Order updates', 'Order tracking notifications will appear here.'),
+        ],
+      ),
+    );
+  }
+  Widget notification(IconData icon, String title, String text) => Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: borderGrey)), child: Row(children: [Container(width: 44, height: 44, decoration: BoxDecoration(color: lightGreen, borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: primaryGreen)), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.w900)), const SizedBox(height: 3), Text(text, style: const TextStyle(color: textGrey, fontSize: 11))]))]));
+}
+
+class EmptyState extends StatelessWidget {
+  final IconData icon; final String title; final String subtitle;
+  const EmptyState({super.key, required this.icon, required this.title, required this.subtitle});
+  @override
+  Widget build(BuildContext context) {
+    return Center(child: Padding(padding: const EdgeInsets.all(30), child: Column(mainAxisSize: MainAxisSize.min, children: [Container(width: 85, height: 85, decoration: const BoxDecoration(color: lightGreen, shape: BoxShape.circle), child: Icon(icon, size: 42, color: primaryGreen)), const SizedBox(height: 15), Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900), textAlign: TextAlign.center), const SizedBox(height: 6), Text(subtitle, style: const TextStyle(color: textGrey), textAlign: TextAlign.center)])));
+  }
+}
+
+extension FirstOrNull<T> on Iterable<T> { T? get firstOrNull => isEmpty ? null : first; }

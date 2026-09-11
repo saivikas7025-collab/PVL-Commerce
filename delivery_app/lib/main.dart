@@ -1,0 +1,1240 @@
+﻿import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:fl_chart/fl_chart.dart';
+
+// ---------- CONFIGURATION ----------
+const String apiBase = 'http://localhost:5000/api';
+const String socketBase = 'http://localhost:5000';
+
+// ---------- MAIN ----------
+void main() => runApp(const PVLDeliveryApp());
+
+class PVLDeliveryApp extends StatelessWidget {
+  const PVLDeliveryApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'PVL Delivery',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        scaffoldBackgroundColor: const Color(0xFFF7F7FB),
+      ),
+      darkTheme: ThemeData.dark().copyWith(
+        colorScheme: const ColorScheme.dark(primary: Colors.deepPurple),
+        scaffoldBackgroundColor: const Color(0xFF1A1A2E),
+      ),
+      themeMode: ThemeMode.system,
+      home: const LoginPage(),
+    );
+  }
+}
+
+// ============================================================
+//  LOGIN PAGE
+// ============================================================
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  bool _loading = false;
+  String _error = '';
+
+  Future<void> _login() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final response = await http.post(
+        Uri.parse('$apiBase/delivery/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'phone': _phoneController.text.trim(),
+          'password': _passwordController.text.trim(),
+        }),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true) {
+          DeliveryService.partnerId = data['partnerId'];
+          DeliveryService.token = (data['token'] ?? '').toString();
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const DeliveryHomePage()),
+          );
+          return;
+        }
+      }
+      setState(() { _error = 'Invalid credentials'; });
+    } catch (e) {
+      setState(() { _error = 'Server error: $e'; });
+    } finally {
+      setState(() { _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.delivery_dining, size: 80, color: Colors.deepPurple),
+              const SizedBox(height: 16),
+              const Text('PVL Delivery', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              const Text('Partner Login', style: TextStyle(fontSize: 16, color: Colors.grey)),
+              const SizedBox(height: 32),
+              TextField(
+                controller: _phoneController,
+                decoration: const InputDecoration(
+                  labelText: 'Phone Number',
+                  prefixText: '+91 ',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.phone,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _passwordController,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  border: OutlineInputBorder(),
+                ),
+                obscureText: true,
+              ),
+              const SizedBox(height: 16),
+              if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _loading ? null : _login,
+                  child: _loading ? const CircularProgressIndicator() : const Text('Login'),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  // Forgot password flow
+                },
+                child: const Text('Forgot Password?'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+//  DELIVERY SERVICE (API & Socket)
+// ============================================================
+class DeliveryService {
+  static int partnerId = 0;
+  static int? activeOrderId;
+  static String token = '';
+
+  static Future<Map<String, dynamic>> getDashboard() async {
+    final res = await http.get(
+      Uri.parse('$apiBase/delivery/dashboard/$partnerId'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<List<dynamic>> getOrders({String? status}) async {
+    final url = status != null ? '$apiBase/delivery/orders/$partnerId?status=$status' : '$apiBase/delivery/orders/$partnerId';
+    final res = await http.get(Uri.parse(url), headers: {'Authorization': 'Bearer $token'});
+    return jsonDecode(res.body)['orders'] ?? [];
+  }
+
+  static Future<Map<String, dynamic>> acceptOrder(int orderId) async {
+    final response = await http.post(
+      Uri.parse("$apiBase/delivery/order/$orderId/accept"),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'partnerId': partnerId,
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Accept failed: ${response.statusCode} ${response.body}');
+    }
+    final body = jsonDecode(response.body);
+    return body['order'] ?? body;
+  }
+
+  static Future<void> rejectOrder(int orderId) async {
+    final response = await http.post(
+      Uri.parse("$apiBase/delivery/order/$orderId/reject"),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'partnerId': partnerId,
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Reject failed: ${response.statusCode} ${response.body}');
+    }
+  }
+
+  static Future<void> startDelivery(int orderId) async {
+    final response = await http.post(
+      Uri.parse("$apiBase/delivery/order/$orderId/start"),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'partnerId': partnerId,
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Start delivery failed: ${response.statusCode} ${response.body}');
+    }
+  }
+
+  static Future<void> completeDelivery(int orderId) async {
+    final response = await http.post(
+      Uri.parse("$apiBase/delivery/order/$orderId/complete"),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'partnerId': partnerId,
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Complete delivery failed: ${response.statusCode} ${response.body}');
+    }
+  }
+
+  static Future<Map<String, dynamic>> getEarnings({String period = 'today'}) async {
+    final res = await http.get(
+      Uri.parse('$apiBase/delivery/earnings/$partnerId?period=$period'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<Map<String, dynamic>> getProfile() async {
+    final res = await http.get(
+      Uri.parse('$apiBase/delivery/profile/$partnerId'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    return jsonDecode(res.body);
+  }
+
+  static Future<void> updateProfile(Map<String, dynamic> data) async {
+    await http.put(
+      Uri.parse('$apiBase/delivery/profile/$partnerId'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      body: jsonEncode(data),
+    );
+  }
+
+  static Future<void> toggleOnline(bool online) async {
+    await http.post(
+      Uri.parse('$apiBase/delivery/toggle-online/$partnerId'),
+      headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+      body: jsonEncode({'online': online}),
+    );
+  }
+}
+
+// ============================================================
+//  DELIVERY HOME PAGE (with bottom nav)
+// ============================================================
+class DeliveryHomePage extends StatefulWidget {
+  const DeliveryHomePage({super.key});
+
+  @override
+  State<DeliveryHomePage> createState() => _DeliveryHomePageState();
+}
+
+class _DeliveryHomePageState extends State<DeliveryHomePage> {
+  int _selectedIndex = 0;
+  late final List<Widget> _pages;
+  late final DeliveryService _service;
+
+  @override
+  void initState() {
+    super.initState();
+    _service = DeliveryService();
+    _pages = [
+      const DashboardTab(),
+      const OrdersTab(),
+      const EarningsTab(),
+      const ProfileTab(),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('PVL Delivery'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.notifications_outlined),
+            onPressed: () {
+              // Navigate to notifications
+            },
+          ),
+        ],
+      ),
+      body: _pages[_selectedIndex],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedIndex,
+        onDestinationSelected: (i) => setState(() => _selectedIndex = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Home'),
+          NavigationDestination(icon: Icon(Icons.local_shipping_outlined), label: 'Orders'),
+          NavigationDestination(icon: Icon(Icons.account_balance_wallet_outlined), label: 'Earnings'),
+          NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+//  DASHBOARD TAB
+// ============================================================
+class DashboardTab extends StatefulWidget {
+  const DashboardTab({super.key});
+
+  @override
+  State<DashboardTab> createState() => _DashboardTabState();
+}
+
+class _DashboardTabState extends State<DashboardTab> {
+  Map<String, dynamic> _data = {};
+  bool _loading = true;
+  String _error = '';
+  bool _online = false;
+  Position? _position;
+  StreamSubscription<Position>? _positionSubscription;
+  IO.Socket? _socket;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboard();
+    _initLocation();
+    _connectSocket();
+  }
+
+  @override
+  void dispose() {
+    _positionSubscription?.cancel();
+    _socket?.disconnect();
+    _socket?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadDashboard() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      _data = await DeliveryService.getDashboard();
+      _online = (_data['partner']?['is_online'] ?? false) == true;
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  void _initLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return;
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.deniedForever) return;
+      _position = await Geolocator.getCurrentPosition();
+      _startLocationStream();
+    } catch (e) {}
+  }
+
+  void _startLocationStream() {
+    _positionSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10),
+    ).listen((pos) {
+      _position = pos;
+      if (_online && _socket != null && _socket!.connected && DeliveryService.activeOrderId != null) {
+        _socket!.emit('delivery:join', {
+          'orderId': DeliveryService.activeOrderId,
+          'deliveryPartnerId': DeliveryService.partnerId,
+        });
+        _socket!.emit('location:update', {
+          'deliveryPartnerId': DeliveryService.partnerId,
+          'orderId': DeliveryService.activeOrderId,
+          'latitude': pos.latitude,
+          'longitude': pos.longitude,
+          'accuracy': pos.accuracy,
+        });
+      }
+    });
+  }
+
+  void _connectSocket() {
+    _socket = IO.io(socketBase, {
+      'transports': ['websocket'],
+      'autoConnect': true,
+    });
+    _socket!.onConnect((_) {
+      _socket!.emit('delivery:join', {
+        'deliveryPartnerId': DeliveryService.partnerId,
+      });
+      if (_position != null && _online) {
+        _socket!.emit('location:update', {
+          'deliveryPartnerId': DeliveryService.partnerId,
+          'latitude': _position!.latitude,
+          'longitude': _position!.longitude,
+        });
+      }
+    });
+    _socket!.on('new_order', (data) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('New order #${data['orderId']} available!')),
+      );
+    });
+    _socket!.connect();
+  }
+
+  Future<void> _toggleOnline(bool value) async {
+    try {
+      await DeliveryService.toggleOnline(value);
+      setState(() { _online = value; });
+      if (value && _position != null) {
+        _socket!.emit('location:update', {
+          'deliveryPartnerId': DeliveryService.partnerId,
+          'latitude': _position!.latitude,
+          'longitude': _position!.longitude,
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to toggle status')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error.isNotEmpty) return Center(child: Text(_error));
+
+    final stats = _data['stats'] ?? {};
+    final activeOrders = stats['active_orders'] ?? 0;
+    final todayEarnings = stats['delivery_fee_today'] ?? 0;
+    final rating = stats['rating'] ?? 0.0;
+
+    return RefreshIndicator(
+      onRefresh: _loadDashboard,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Online toggle card
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(
+                      _online ? Icons.gps_fixed : Icons.power_settings_new,
+                      color: _online ? Colors.green : Colors.grey,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _online ? 'You are Online' : 'You are Offline',
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            _online ? 'You will receive delivery requests' : 'Go online to receive orders',
+                            style: TextStyle(color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: _online,
+                      onChanged: _toggleOnline,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Quick stats
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 3,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.2,
+              children: [
+                _statCard('Active Orders', '$activeOrders', Icons.inventory_2, Colors.blue),
+                _statCard('Today Earnings', '\u20B9$todayEarnings', Icons.attach_money, Colors.green),
+                _statCard('Rating', '$rating ★', Icons.star, Colors.orange),
+              ],
+            ),
+            const SizedBox(height: 24),
+            const Text('Recent Orders', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            if (_data['recent_orders'] != null && (_data['recent_orders'] as List).isNotEmpty)
+              ...(_data['recent_orders'] as List).take(3).map((order) => _orderTile(order))
+            else
+              const Text('No recent orders'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _statCard(String title, String value, IconData icon, Color color) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color),
+            const SizedBox(height: 4),
+            Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(title, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _orderTile(Map<String, dynamic> order) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.receipt_long),
+        title: Text('#PVL${order['id']}'),
+        subtitle: Text(
+          '\u20B9${order['total_amount']} | ${order['customer_address']}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: Chip(
+          label: Text(order['status'] ?? 'pending'),
+          backgroundColor: order['status'] == 'delivered'
+              ? Colors.green.shade100
+              : order['status'] == 'cancelled'
+                  ? Colors.red.shade100
+                  : Colors.orange.shade100,
+        ),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => OrderDetailPage(orderId: order['id'])),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ============================================================
+//  ORDERS TAB (with tabs and filters)
+// ============================================================
+class OrdersTab extends StatefulWidget {
+  const OrdersTab({super.key});
+
+  @override
+  State<OrdersTab> createState() => _OrdersTabState();
+}
+
+class _OrdersTabState extends State<OrdersTab> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  List<dynamic> _orders = [];
+  bool _loading = true;
+  String _error = '';
+  final List<String> _statuses = ['all', 'pending', 'accepted', 'out_for_delivery', 'delivered', 'cancelled'];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _statuses.length, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) {
+        _loadOrders(_statuses[_tabController.index]);
+      }
+    });
+    _loadOrders('all');
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadOrders(String status) async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final filter = status == 'all' ? null : status;
+      _orders = await DeliveryService.getOrders(status: filter);
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabs: _statuses.map((s) => Tab(text: s.toUpperCase())).toList(),
+        ),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _error.isNotEmpty
+                  ? Center(child: Text(_error))
+                  : _orders.isEmpty
+                      ? const Center(child: Text('No orders'))
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(8),
+                          itemCount: _orders.length,
+                          itemBuilder: (_, i) {
+                            final order = _orders[i];
+                            return Card(
+                              child: ListTile(
+                                leading: const Icon(Icons.receipt_long),
+                                title: Text('#PVL${order['id']}'),
+                                subtitle: Text(
+                                  '\u20B9${order['total_amount']} | ${order['customer_address']}',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: Chip(
+                                  label: Text(order['status'] ?? 'pending'),
+                                  backgroundColor: _statusColor(order['status']),
+                                ),
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => OrderDetailPage(orderId: order['id'])),
+                                  );
+                                },
+                              ),
+                            );
+                          },
+                        ),
+        ),
+      ],
+    );
+  }
+
+  Color _statusColor(String? status) {
+    switch (status) {
+      case 'delivered': return Colors.green.shade100;
+      case 'cancelled': return Colors.red.shade100;
+      case 'out_for_delivery': return Colors.blue.shade100;
+      default: return Colors.orange.shade100;
+    }
+  }
+}
+
+// ============================================================
+//  ORDER DETAIL PAGE (with map and actions)
+// ============================================================
+class OrderDetailPage extends StatefulWidget {
+  final int orderId;
+  const OrderDetailPage({super.key, required this.orderId});
+
+  @override
+  State<OrderDetailPage> createState() => _OrderDetailPageState();
+}
+
+class _OrderDetailPageState extends State<OrderDetailPage> {
+  Map<String, dynamic> _order = {};
+  List<Map<String, dynamic>> _items = []; // extracted items
+  bool _loading = true;
+  String _error = '';
+  Position? _currentPosition;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOrder();
+    _getCurrentLocation();
+  }
+
+  Future<void> _loadOrder() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final url = '$apiBase/delivery/order/${widget.orderId}';
+      debugPrint('ORDER URL: $url');
+      final res = await http.get(
+        Uri.parse(url),
+        headers: {'Authorization': 'Bearer ${DeliveryService.token}'},
+      );
+      debugPrint('ORDER STATUS: ${res.statusCode}');
+      debugPrint('ORDER RESPONSE: ${res.body}');
+
+      final body = jsonDecode(res.body);
+      debugPrint('PARSED BODY: $body');
+
+      // Unwrap order
+      _order = body['order'] ?? body;
+      debugPrint('ORDER DATA: $_order');
+
+      // Extract items if present
+      _items = (body['items'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
+      debugPrint('ITEMS: $_items');
+
+      setState(() { _loading = false; });
+    } catch (e) {
+      debugPrint('LOAD ORDER ERROR: $e');
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _getCurrentLocation() async {
+    try {
+      final pos = await Geolocator.getCurrentPosition();
+      setState(() { _currentPosition = pos; });
+    } catch (_) {}
+  }
+
+  bool _isOrderAccepted(Map<String, dynamic> order) {
+    return order['status'] == 'ready_for_pickup' &&
+        (order['assignment_status'] == 'accepted' || order['assignment_status'] == true);
+  }
+
+  Future<void> _accept() async {
+    try {
+      debugPrint('ACCEPTING ORDER ${widget.orderId} with partner ${DeliveryService.partnerId}');
+      final updatedOrder = await DeliveryService.acceptOrder(widget.orderId);
+      debugPrint('ACCEPT RESPONSE: $updatedOrder');
+      setState(() {
+        _order = updatedOrder;
+      });
+      DeliveryService.activeOrderId = widget.orderId;
+      // Refresh to get items and full details again
+      await _loadOrder();
+    } catch (e) {
+      debugPrint('ACCEPT ERROR: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Accept failed: $e')));
+    }
+  }
+
+  Future<void> _reject() async {
+    try {
+      await DeliveryService.rejectOrder(widget.orderId);
+      _loadOrder();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reject failed: $e')));
+    }
+  }
+
+  Future<void> _startDelivery() async {
+    try {
+      await DeliveryService.startDelivery(widget.orderId);
+      _loadOrder();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Start failed: $e')));
+    }
+  }
+
+  Future<void> _complete() async {
+    try {
+      await DeliveryService.completeDelivery(widget.orderId);
+      _loadOrder();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Complete failed: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_error.isNotEmpty) return Scaffold(body: Center(child: Text(_error)));
+
+    final status = _order['status'] ?? 'pending';
+    final total = _order['total_amount'] ?? 0;
+    final address = _order['full_address'] ?? _order['address'] ?? '';
+    final isAccepted = _isOrderAccepted(_order);
+
+    // Try to get customer name and phone – adjust field names based on debug output
+    final customerName = _order['customer_name'] ?? _order['name'] ?? _order['customer']?['name'] ?? '';
+    final customerPhone = _order['customer_phone'] ?? _order['phone'] ?? _order['customer']?['phone'] ?? '';
+
+    return Scaffold(
+      appBar: AppBar(title: Text('#PVL${widget.orderId}')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Map
+            SizedBox(
+              height: 200,
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: LatLng(17.3850, 78.4867), // Replace with actual lat/lng from order
+                  initialZoom: 14,
+                ),
+                children: [
+                  TileLayer(
+                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.pvlcommerce.delivery',
+                  ),
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: LatLng(17.3850, 78.4867),
+                        width: 40,
+                        height: 40,
+                        child: const Icon(Icons.location_pin, color: Colors.red, size: 40),
+                      ),
+                      if (_currentPosition != null)
+                        Marker(
+                          point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                          width: 40,
+                          height: 40,
+                          child: const Icon(Icons.delivery_dining, color: Colors.blue, size: 40),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Status and actions
+            Row(
+              children: [
+                Expanded(
+                  child: Chip(
+                    label: Text(status.toUpperCase()),
+                    backgroundColor: _statusColor(status),
+                  ),
+                ),
+                if (status == 'pending' || (status == 'ready_for_pickup' && !isAccepted))
+                  Row(
+                    children: [
+                      ElevatedButton(
+                        onPressed: _accept,
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                        child: const Text('Accept'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: _reject,
+                        style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                        child: const Text('Reject'),
+                      ),
+                    ],
+                  )
+                else if (isAccepted)
+                  ElevatedButton(
+                    onPressed: _startDelivery,
+                    child: const Text('Start Delivery'),
+                  )
+                else if (status == 'out_for_delivery')
+                  ElevatedButton(
+                    onPressed: _complete,
+                    child: const Text('Complete Delivery'),
+                  ),
+              ],
+            ),
+            const Divider(height: 24),
+            // Customer info
+            const Text('Customer', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text('$customerName | $customerPhone'),
+            Text(
+              address,
+              style: const TextStyle(color: Colors.grey),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 16),
+            // Items
+            const Text('Items', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            ..._items.map<Widget>((item) {
+              return ListTile(
+                leading: Text('${item['quantity'] ?? 1}x'),
+                title: Text(item['product_name'] ?? 'Unknown item'),
+                trailing: Text('\u20B9${item['price'] ?? 0}'),
+              );
+            }).toList(),
+            const Divider(),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Total', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Text('\u20B9$total', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'delivered': return Colors.green.shade100;
+      case 'cancelled': return Colors.red.shade100;
+      case 'out_for_delivery': return Colors.blue.shade100;
+      default: return Colors.orange.shade100;
+    }
+  }
+}
+
+// ============================================================
+//  EARNINGS TAB (with chart)
+// ============================================================
+class EarningsTab extends StatefulWidget {
+  const EarningsTab({super.key});
+
+  @override
+  State<EarningsTab> createState() => _EarningsTabState();
+}
+
+class _EarningsTabState extends State<EarningsTab> {
+  Map<String, dynamic> _data = {};
+  bool _loading = true;
+  String _error = '';
+  String _period = 'today';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEarnings();
+  }
+
+  Future<void> _loadEarnings() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      _data = await DeliveryService.getEarnings(period: _period);
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error.isNotEmpty) return Center(child: Text(_error));
+
+    final stats = _data['stats'] ?? {};
+    final history = _data['history'] ?? [];
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Period selector
+          Row(
+            children: [
+              const Text('Period:'),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButton<String>(
+                  value: _period,
+                  items: const [
+                    DropdownMenuItem(value: 'today', child: Text('Today')),
+                    DropdownMenuItem(value: 'week', child: Text('This Week')),
+                    DropdownMenuItem(value: 'month', child: Text('This Month')),
+                  ],
+                  onChanged: (v) {
+                    setState(() { _period = v!; });
+                    _loadEarnings();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Summary cards
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.5,
+            children: [
+              _statCard('Total Earnings', '\u20B9${stats['total'] ?? 0}', Icons.attach_money, Colors.green),
+              _statCard('Deliveries', '${stats['deliveries'] ?? 0}', Icons.local_shipping, Colors.blue),
+              _statCard('Avg per Delivery', '\u20B9${stats['avg'] ?? 0}', Icons.trending_up, Colors.purple),
+              _statCard('Rating', '${stats['rating'] ?? 0} ★', Icons.star, Colors.orange),
+            ],
+          ),
+          const SizedBox(height: 24),
+          // Chart
+          const Text('Earnings Trend', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          if (history.isNotEmpty)
+            SizedBox(
+              height: 200,
+              child: LineChart(
+                LineChartData(
+                  gridData: const FlGridData(show: true),
+                  titlesData: const FlTitlesData(
+                    leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+                    bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+                  ),
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: history.asMap().entries.map((e) {
+                        return FlSpot(e.key.toDouble(), e.value['amount']?.toDouble() ?? 0);
+                      }).toList(),
+                      isCurved: true,
+                      color: Colors.blue,
+                      barWidth: 3,
+                      dotData: const FlDotData(show: false),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            const Text('No earnings data'),
+        ],
+      ),
+    );
+  }
+
+  Widget _statCard(String title, String value, IconData icon, Color color) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color),
+            const SizedBox(height: 4),
+            Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text(title, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+//  PROFILE TAB
+// ============================================================
+class ProfileTab extends StatefulWidget {
+  const ProfileTab({super.key});
+
+  @override
+  State<ProfileTab> createState() => _ProfileTabState();
+}
+
+class _ProfileTabState extends State<ProfileTab> {
+  Map<String, dynamic> _profile = {};
+  bool _loading = true;
+  String _error = '';
+  bool _editing = false;
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController, _phoneController, _vehicleController, _bankController, _accountController;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      _profile = await DeliveryService.getProfile();
+      _nameController = TextEditingController(text: _profile['name'] ?? '');
+      _phoneController = TextEditingController(text: _profile['phone'] ?? '');
+      _vehicleController = TextEditingController(text: _profile['vehicle'] ?? '');
+      _bankController = TextEditingController(text: _profile['bank'] ?? '');
+      _accountController = TextEditingController(text: _profile['account'] ?? '');
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    if (!_formKey.currentState!.validate()) return;
+    try {
+      await DeliveryService.updateProfile({
+        'name': _nameController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'vehicle': _vehicleController.text.trim(),
+        'bank': _bankController.text.trim(),
+        'account': _accountController.text.trim(),
+      });
+      setState(() { _editing = false; });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated')));
+      _loadProfile();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error.isNotEmpty) return Center(child: Text(_error));
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Form(
+        key: _formKey,
+        child: ListView(
+          children: [
+            // Avatar
+            Center(
+              child: CircleAvatar(
+                radius: 50,
+                backgroundImage: _profile['avatar'] != null ? NetworkImage(_profile['avatar']) : null,
+                child: const Icon(Icons.person, size: 50),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: Text(_profile['name'] ?? 'Unknown', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Text('ID: #${_profile['id']}', style: const TextStyle(color: Colors.grey)),
+            ),
+            const Divider(height: 32),
+            if (_editing)
+              Column(
+                children: [
+                  TextFormField(
+                    controller: _nameController,
+                    decoration: const InputDecoration(labelText: 'Full Name'),
+                    validator: (v) => v!.trim().isEmpty ? 'Required' : null,
+                  ),
+                  TextFormField(
+                    controller: _phoneController,
+                    decoration: const InputDecoration(labelText: 'Phone'),
+                    keyboardType: TextInputType.phone,
+                  ),
+                  TextFormField(
+                    controller: _vehicleController,
+                    decoration: const InputDecoration(labelText: 'Vehicle Number'),
+                  ),
+                  TextFormField(
+                    controller: _bankController,
+                    decoration: const InputDecoration(labelText: 'Bank Name'),
+                  ),
+                  TextFormField(
+                    controller: _accountController,
+                    decoration: const InputDecoration(labelText: 'Account Number'),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _saveProfile,
+                          child: const Text('Save'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => setState(() { _editing = false; _loadProfile(); }),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              )
+            else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _infoTile('Phone', _profile['phone'] ?? '-'),
+                  _infoTile('Vehicle', _profile['vehicle'] ?? '-'),
+                  _infoTile('Bank', _profile['bank'] ?? '-'),
+                  _infoTile('Account', _profile['account'] ?? '-'),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () => setState(() { _editing = true; }),
+                    child: const Text('Edit Profile'),
+                  ),
+                ],
+              ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.help_outline),
+              title: const Text('Support'),
+              onTap: () {
+                // Navigate to support
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Logout'),
+              onTap: () {
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _infoTile(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(width: 80, child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold))),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+}

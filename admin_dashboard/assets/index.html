@@ -1,0 +1,1433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>PVL Commerce — Admin</title>
+
+<style>
+
+:root{
+  font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+  color:#17202a;
+  background:#f5f7fb;
+}
+
+*{
+  box-sizing:border-box;
+}
+
+html,
+body{
+  margin:0;
+  padding:0;
+  min-height:100%;
+  background:#f5f7fb;
+}
+
+body{
+  overflow-x:hidden;
+}
+
+button,
+input{
+  font:inherit;
+}
+
+button{
+  -webkit-tap-highlight-color:transparent;
+}
+
+/* =========================
+   APP LAYOUT
+========================= */
+
+.app{
+  display:flex;
+  min-height:100vh;
+}
+
+/* =========================
+   SIDEBAR
+========================= */
+
+aside{
+  width:245px;
+  min-width:245px;
+  background:#111827;
+  color:#fff;
+  padding:20px 16px;
+  position:sticky;
+  top:0;
+  height:100vh;
+  overflow-y:auto;
+  z-index:20;
+}
+
+.logo{
+  font-size:22px;
+  font-weight:800;
+  margin:0 8px 24px;
+  letter-spacing:-.3px;
+}
+
+.nav{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.nav button{
+  display:flex;
+  align-items:center;
+  gap:11px;
+  width:100%;
+  border:0;
+  background:transparent;
+  color:#cbd5e1;
+  text-align:left;
+  padding:12px 13px;
+  border-radius:10px;
+  cursor:pointer;
+  font-size:14px;
+  font-weight:600;
+  transition:
+    background .15s ease,
+    color .15s ease,
+    transform .15s ease;
+}
+
+.nav button:hover{
+  background:#1e293b;
+  color:#fff;
+}
+
+.nav button.active{
+  background:#263244;
+  color:#fff;
+  box-shadow:inset 3px 0 0 #fff;
+}
+
+.nav-icon{
+  width:24px;
+  min-width:24px;
+  text-align:center;
+  font-size:18px;
+  line-height:1;
+}
+
+.nav-text{
+  white-space:nowrap;
+}
+
+/* =========================
+   MAIN
+========================= */
+
+main{
+  flex:1;
+  min-width:0;
+  padding:24px;
+}
+
+/* =========================
+   TOP BAR
+========================= */
+
+.top{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:15px;
+  margin-bottom:20px;
+}
+
+.top h1{
+  margin:0;
+  font-size:28px;
+  font-weight:800;
+  letter-spacing:-.5px;
+}
+
+.badge{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  background:#dcfce7;
+  color:#166534;
+  padding:9px 13px;
+  border-radius:999px;
+  font-size:13px;
+  font-weight:700;
+  white-space:nowrap;
+}
+
+.badge-dot{
+  font-size:10px;
+}
+
+/* =========================
+   DASHBOARD CARDS
+========================= */
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:14px;
+}
+
+.card{
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  padding:18px;
+  box-shadow:0 1px 2px rgba(0,0,0,.03);
+}
+
+.metric-card{
+  min-height:120px;
+}
+
+.metric-title{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:#6b7280;
+  font-size:13px;
+  font-weight:600;
+}
+
+.metric-icon{
+  font-size:18px;
+}
+
+.metric{
+  font-size:30px;
+  font-weight:800;
+  margin-top:10px;
+  color:#111827;
+}
+
+/* =========================
+   SECTIONS
+========================= */
+
+.section{
+  margin-top:18px;
+}
+
+.section-title{
+  margin:0 0 14px;
+  font-size:17px;
+  font-weight:800;
+}
+
+.system-row{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.system-separator{
+  color:#9ca3af;
+}
+
+/* =========================
+   STATUS
+========================= */
+
+.status{
+  display:inline-flex;
+  align-items:center;
+  padding:5px 9px;
+  border-radius:999px;
+  background:#eef2ff;
+  color:#3730a3;
+  font-size:12px;
+  font-weight:700;
+}
+
+.status.online{
+  background:#ecfdf5;
+  color:#166534;
+}
+
+/* =========================
+   SEARCH / ACTIONS
+========================= */
+
+.toolbar{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-bottom:12px;
+}
+
+.search{
+  width:280px;
+  max-width:100%;
+  padding:11px 13px;
+  border:1px solid #d1d5db;
+  border-radius:10px;
+  background:#fff;
+  color:#111827;
+  outline:none;
+  transition:border .15s ease,box-shadow .15s ease;
+}
+
+.search:focus{
+  border-color:#64748b;
+  box-shadow:0 0 0 3px rgba(100,116,139,.12);
+}
+
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  padding:10px 14px;
+  border:0;
+  border-radius:10px;
+  background:#111827;
+  color:#fff;
+  cursor:pointer;
+  font-size:14px;
+  font-weight:700;
+  transition:background .15s ease,transform .1s ease;
+}
+
+.btn:hover{
+  background:#1f2937;
+}
+
+.btn:active{
+  transform:translateY(1px);
+}
+
+.btn.secondary{
+  background:#e5e7eb;
+  color:#111827;
+}
+
+.btn.secondary:hover{
+  background:#d1d5db;
+}
+
+/* =========================
+   TABLES
+========================= */
+
+.tablewrap{
+  width:100%;
+  overflow-x:auto;
+  border:1px solid #e5e7eb;
+  border-radius:12px;
+  background:#fff;
+  -webkit-overflow-scrolling:touch;
+}
+
+table{
+  width:100%;
+  min-width:680px;
+  border-collapse:collapse;
+  background:#fff;
+}
+
+th,
+td{
+  padding:12px 13px;
+  border-bottom:1px solid #eef0f3;
+  text-align:left;
+  font-size:13px;
+  white-space:nowrap;
+}
+
+th{
+  background:#f9fafb;
+  color:#374151;
+  font-weight:800;
+}
+
+td{
+  color:#374151;
+}
+
+tbody tr:last-child td{
+  border-bottom:0;
+}
+
+tbody tr:hover{
+  background:#f9fafb;
+}
+
+/* =========================
+   NOTICES
+========================= */
+
+.notice{
+  padding:12px 14px;
+  border-radius:10px;
+  background:#fff7ed;
+  color:#9a3412;
+  margin-bottom:14px;
+  border:1px solid #fed7aa;
+  font-size:13px;
+  font-weight:600;
+}
+
+.notice.ok{
+  background:#ecfdf5;
+  color:#166534;
+  border-color:#bbf7d0;
+}
+
+/* =========================
+   EMPTY / HIDDEN
+========================= */
+
+.hidden{
+  display:none !important;
+}
+
+.empty{
+  padding:25px;
+  text-align:center;
+  color:#6b7280;
+  font-size:14px;
+}
+
+/* =========================
+   TABLET
+========================= */
+
+@media(max-width:1000px){
+
+  aside{
+    width:210px;
+    min-width:210px;
+    padding:18px 12px;
+  }
+
+  main{
+    padding:20px;
+  }
+
+  .grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+}
+
+/* =========================
+   MOBILE
+========================= */
+
+@media(max-width:700px){
+
+  .app{
+    display:block;
+  }
+
+  aside{
+    position:sticky;
+    top:0;
+    width:100%;
+    min-width:100%;
+    height:auto;
+    max-height:none;
+    padding:10px;
+    overflow:hidden;
+    z-index:50;
+  }
+
+  .logo{
+    font-size:19px;
+    margin:0 5px 9px;
+  }
+
+  .nav{
+    display:flex;
+    flex-direction:row;
+    gap:6px;
+    overflow-x:auto;
+    padding:2px 2px 5px;
+    scrollbar-width:thin;
+  }
+
+  .nav button{
+    flex:0 0 auto;
+    width:auto;
+    margin:0;
+    padding:9px 11px;
+    gap:7px;
+    font-size:13px;
+    border-radius:9px;
+  }
+
+  .nav button.active{
+    box-shadow:inset 0 -3px 0 #fff;
+  }
+
+  .nav-icon{
+    width:auto;
+    min-width:auto;
+    font-size:16px;
+  }
+
+  .nav-text{
+    white-space:nowrap;
+  }
+
+  main{
+    padding:15px;
+  }
+
+  .top{
+    margin-bottom:16px;
+  }
+
+  .top h1{
+    font-size:23px;
+  }
+
+  .badge{
+    padding:7px 10px;
+    font-size:12px;
+  }
+
+  .grid{
+    grid-template-columns:1fr;
+    gap:10px;
+  }
+
+  .metric-card{
+    min-height:105px;
+  }
+
+  .metric{
+    font-size:27px;
+  }
+
+  .search{
+    width:100%;
+  }
+
+  .toolbar{
+    align-items:stretch;
+  }
+
+  .toolbar .btn{
+    min-height:43px;
+  }
+
+}
+
+/* =========================
+   SMALL PHONES
+========================= */
+
+@media(max-width:430px){
+
+  main{
+    padding:12px;
+  }
+
+  .top{
+    align-items:flex-start;
+  }
+
+  .top h1{
+    font-size:21px;
+  }
+
+  .badge{
+    font-size:11px;
+  }
+
+  .card{
+    padding:15px;
+  }
+
+  .section{
+    margin-top:14px;
+  }
+
+  .section-title{
+    font-size:16px;
+  }
+
+  th,
+  td{
+    padding:10px;
+    font-size:12px;
+  }
+
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+<!-- =========================
+     SIDEBAR
+========================= -->
+
+<aside>
+
+  <div class="logo">
+    PVL Commerce
+  </div>
+
+  <div class="nav">
+
+    <button class="active" data-page="dashboard">
+      <span class="nav-icon">🏠</span>
+      <span class="nav-text">Dashboard</span>
+    </button>
+
+    <button data-page="orders">
+      <span class="nav-icon">📦</span>
+      <span class="nav-text">Orders</span>
+    </button>
+
+    <button data-page="stores">
+      <span class="nav-icon">🏪</span>
+      <span class="nav-text">Stores</span>
+    </button>
+
+    <button data-page="delivery">
+      <span class="nav-icon">🚚</span>
+      <span class="nav-text">Delivery Partners</span>
+    </button>
+
+    <button data-page="customers">
+      <span class="nav-icon">👥</span>
+      <span class="nav-text">Customers</span>
+    </button>
+
+    <button data-page="products">
+      <span class="nav-icon">🛒</span>
+      <span class="nav-text">Products</span>
+    </button>
+
+    <button data-page="inventory">
+      <span class="nav-icon">📊</span>
+      <span class="nav-text">Inventory</span>
+    </button>
+
+    <button data-page="payments">
+      <span class="nav-icon">💳</span>
+      <span class="nav-text">Payments</span>
+    </button>
+
+    <button data-page="reports">
+      <span class="nav-icon">📈</span>
+      <span class="nav-text">Reports</span>
+    </button>
+
+    <button data-page="settings">
+      <span class="nav-icon">⚙️</span>
+      <span class="nav-text">Settings</span>
+    </button>
+
+  </div>
+
+</aside>
+
+
+<!-- =========================
+     MAIN CONTENT
+========================= -->
+
+<main>
+
+  <div class="top">
+
+    <h1 id="title">
+      Dashboard
+    </h1>
+
+    <div class="badge">
+      <span class="badge-dot">●</span>
+      Admin
+    </div>
+
+  </div>
+
+
+  <div id="message"></div>
+
+
+  <!-- =========================
+       DASHBOARD
+  ========================= -->
+
+  <section id="dashboard" class="page">
+
+    <div class="grid">
+
+      <div class="card metric-card">
+
+        <div class="metric-title">
+          <span class="metric-icon">📦</span>
+          Total Orders
+        </div>
+
+        <div class="metric" id="mOrders">
+          —
+        </div>
+
+      </div>
+
+
+      <div class="card metric-card">
+
+        <div class="metric-title">
+          <span class="metric-icon">💰</span>
+          Today's Sales
+        </div>
+
+        <div class="metric" id="mSales">
+          ₹—
+        </div>
+
+      </div>
+
+
+      <div class="card metric-card">
+
+        <div class="metric-title">
+          <span class="metric-icon">👥</span>
+          Customers
+        </div>
+
+        <div class="metric" id="mCustomers">
+          —
+        </div>
+
+      </div>
+
+
+      <div class="card metric-card">
+
+        <div class="metric-title">
+          <span class="metric-icon">🚚</span>
+          Active Deliveries
+        </div>
+
+        <div class="metric" id="mDeliveries">
+          —
+        </div>
+
+      </div>
+
+    </div>
+
+
+    <!-- SYSTEM STATUS -->
+
+    <div class="section card">
+
+      <h3 class="section-title">
+        System Status
+      </h3>
+
+      <div id="health" class="system-row">
+        Checking backend…
+      </div>
+
+    </div>
+
+
+    <!-- RECENT ORDERS -->
+
+    <div class="section">
+
+      <div class="card">
+
+        <h3 class="section-title">
+          Recent Orders
+        </h3>
+
+        <div class="tablewrap">
+
+          <table>
+
+            <thead>
+
+              <tr>
+                <th>Order</th>
+                <th>Status</th>
+                <th>Total</th>
+                <th>Payment</th>
+                <th>Created</th>
+              </tr>
+
+            </thead>
+
+            <tbody id="recent"></tbody>
+
+          </table>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <!-- =========================
+       LIST PAGES
+  ========================= -->
+
+  <section id="list" class="page hidden">
+
+    <div class="card">
+
+      <div class="toolbar">
+
+        <input
+          class="search"
+          id="q"
+          type="search"
+          placeholder="Search…"
+          autocomplete="off"
+        >
+
+        <button
+          class="btn"
+          onclick="loadCurrent()"
+        >
+          🔄 Refresh
+        </button>
+
+      </div>
+
+
+      <div class="tablewrap">
+
+        <table>
+
+          <thead id="thead"></thead>
+
+          <tbody id="tbody"></tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+
+  </section>
+
+</main>
+
+</div>
+
+
+<script>
+
+/* =========================
+   API
+========================= */
+
+const API = 'http://192.168.0.105:5000/api/admin';
+
+
+/* =========================
+   STATE
+========================= */
+
+let current = 'dashboard';
+
+
+/* =========================
+   PAGE LABELS
+========================= */
+
+const labels = {
+
+  orders: 'Orders',
+
+  stores: 'Stores',
+
+  delivery: 'Delivery Partners',
+
+  customers: 'Customers',
+
+  products: 'Products',
+
+  inventory: 'Inventory',
+
+  payments: 'Payments',
+
+  reports: 'Reports',
+
+  settings: 'Settings'
+
+};
+
+
+/* =========================
+   TABLE CONFIGURATION
+========================= */
+
+const configs = {
+
+  orders: [
+    'id',
+    'user_id',
+    'store_id',
+    'status',
+    'total_amount',
+    'payment_method',
+    'payment_status',
+    'created_at'
+  ],
+
+  stores: [
+    'id',
+    'name',
+    'is_active'
+  ],
+
+  delivery: [
+    'id',
+    'name',
+    'phone',
+    'status'
+  ],
+
+  customers: [
+    'id',
+    'name',
+    'phone',
+    'email',
+    'created_at'
+  ],
+
+  products: [
+    'id',
+    'name',
+    'unit',
+    'price',
+    'original_price',
+    'is_active'
+  ],
+
+  inventory: [
+    'id',
+    'store_id',
+    'product_id',
+    'stock_quantity',
+    'selling_price',
+    'is_available'
+  ],
+
+  payments: [
+    'id',
+    'order_id',
+    'amount',
+    'method',
+    'status',
+    'created_at'
+  ],
+
+  reports: [
+    'metric',
+    'value'
+  ],
+
+  settings: [
+    'setting',
+    'value'
+  ]
+
+};
+
+
+/* =========================
+   NAVIGATION
+========================= */
+
+document
+  .querySelectorAll('.nav button')
+  .forEach(button => {
+
+    button.addEventListener('click', () => {
+
+      show(button.dataset.page);
+
+    });
+
+  });
+
+
+/* =========================
+   SHOW PAGE
+========================= */
+
+function show(page){
+
+  current = page;
+
+  document
+    .querySelectorAll('.nav button')
+    .forEach(button => {
+
+      button.classList.toggle(
+        'active',
+        button.dataset.page === page
+      );
+
+    });
+
+
+  document.getElementById('title').textContent =
+    page === 'dashboard'
+      ? 'Dashboard'
+      : labels[page];
+
+
+  document
+    .getElementById('dashboard')
+    .classList.toggle(
+      'hidden',
+      page !== 'dashboard'
+    );
+
+
+  document
+    .getElementById('list')
+    .classList.toggle(
+      'hidden',
+      page === 'dashboard'
+    );
+
+
+  if(page === 'dashboard'){
+
+    loadDash();
+
+  }else{
+
+    loadCurrent();
+
+  }
+
+}
+
+
+/* =========================
+   API GET
+========================= */
+
+async function get(path){
+
+  const response = await fetch(
+    API + path,
+    {
+      cache:'no-store'
+    }
+  );
+
+  if(!response.ok){
+
+    throw new Error(
+      await response.text()
+    );
+
+  }
+
+  return response.json();
+
+}
+
+
+/* =========================
+   MESSAGE
+========================= */
+
+function msg(text,ok=false){
+
+  const message =
+    document.getElementById('message');
+
+  message.innerHTML =
+    `
+      <div class="notice ${ok ? 'ok' : ''}">
+        ${escapeHtml(text)}
+      </div>
+    `;
+
+  setTimeout(() => {
+
+    message.innerHTML = '';
+
+  },2500);
+
+}
+
+
+/* =========================
+   ESCAPE HTML
+========================= */
+
+function escapeHtml(value){
+
+  return String(value ?? '')
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'","&#039;");
+
+}
+
+
+/* =========================
+   LOAD DASHBOARD
+========================= */
+
+async function loadDash(){
+
+  try{
+
+    const data =
+      await get('/dashboard');
+
+
+    document.getElementById('mOrders')
+      .textContent =
+      data.total_orders ?? 0;
+
+
+    document.getElementById('mSales')
+      .textContent =
+      '₹' +
+      Number(
+        data.today_sales || 0
+      ).toFixed(2);
+
+
+    document.getElementById('mCustomers')
+      .textContent =
+      data.customers ?? 0;
+
+
+    document.getElementById('mDeliveries')
+      .textContent =
+      data.active_deliveries ?? 0;
+
+
+    const healthData =
+      await get('/health');
+
+
+    document.getElementById('health')
+      .innerHTML =
+      `
+        <span class="status online">
+          🟢 Backend:
+          ${healthData.ok ? 'Online' : 'Check'}
+        </span>
+
+        <span class="system-separator">
+          ·
+        </span>
+
+        <span class="status online">
+          🟢 PostgreSQL:
+          ${healthData.database ? 'Connected' : 'Check'}
+        </span>
+      `;
+
+
+    const recentOrders =
+      data.recent_orders || [];
+
+
+    if(!recentOrders.length){
+
+      document.getElementById('recent')
+        .innerHTML =
+        `
+          <tr>
+            <td colspan="5">
+              <div class="empty">
+                No recent orders
+              </div>
+            </td>
+          </tr>
+        `;
+
+      return;
+
+    }
+
+
+    document.getElementById('recent')
+      .innerHTML =
+
+      recentOrders
+        .map(order => {
+
+          const created =
+            order.created_at
+              ? new Date(
+                  order.created_at
+                ).toLocaleString()
+              : '—';
+
+
+          return `
+            <tr>
+
+              <td>
+                #PVL${escapeHtml(order.id)}
+              </td>
+
+              <td>
+                <span class="status">
+                  ${escapeHtml(order.status)}
+                </span>
+              </td>
+
+              <td>
+                ₹${Number(
+                  order.total_amount || 0
+                ).toFixed(2)}
+              </td>
+
+              <td>
+                ${escapeHtml(
+                  order.payment_status || '—'
+                )}
+              </td>
+
+              <td>
+                ${escapeHtml(created)}
+              </td>
+
+            </tr>
+          `;
+
+        })
+        .join('');
+
+  }
+  catch(error){
+
+    msg(
+      'Admin API not reachable: ' +
+      error.message
+    );
+
+  }
+
+}
+
+
+/* =========================
+   LOAD CURRENT PAGE
+========================= */
+
+async function loadCurrent(){
+
+  if(current === 'dashboard'){
+
+    loadDash();
+
+    return;
+
+  }
+
+
+  try{
+
+    const data =
+      await get('/' + current);
+
+
+    const rows =
+      data.rows || [];
+
+
+    let columns =
+      configs[current];
+
+
+    if(!columns){
+
+      columns =
+        Object.keys(
+          rows[0] || {}
+        );
+
+    }
+
+
+    /* TABLE HEAD */
+
+    document.getElementById('thead')
+      .innerHTML =
+      `
+        <tr>
+
+          ${
+            columns
+              .map(
+                column =>
+                  `<th>${escapeHtml(column)}</th>`
+              )
+              .join('')
+          }
+
+        </tr>
+      `;
+
+
+    /* TABLE BODY */
+
+    if(!rows.length){
+
+      document.getElementById('tbody')
+        .innerHTML =
+        `
+          <tr>
+
+            <td colspan="${columns.length}">
+
+              <div class="empty">
+                No records
+              </div>
+
+            </td>
+
+          </tr>
+        `;
+
+      return;
+
+    }
+
+
+    document.getElementById('tbody')
+      .innerHTML =
+
+      rows
+        .map(row => {
+
+          return `
+            <tr>
+
+              ${
+                columns
+                  .map(column => {
+
+                    let value =
+                      row[column];
+
+
+                    if(
+                      value === null ||
+                      value === undefined ||
+                      value === ''
+                    ){
+
+                      value = '—';
+
+                    }
+
+
+                    return `
+                      <td>
+                        ${escapeHtml(value)}
+                      </td>
+                    `;
+
+                  })
+                  .join('')
+              }
+
+            </tr>
+          `;
+
+        })
+        .join('');
+
+  }
+  catch(error){
+
+    msg(
+      'Could not load ' +
+      labels[current] +
+      ': ' +
+      error.message
+    );
+
+  }
+
+}
+
+
+/* =========================
+   SEARCH
+========================= */
+
+const searchInput =
+  document.getElementById('q');
+
+
+if(searchInput){
+
+  searchInput.addEventListener(
+    'input',
+    () => {
+
+      const term =
+        searchInput.value
+          .trim()
+          .toLowerCase();
+
+
+      document
+        .querySelectorAll('#tbody tr')
+        .forEach(row => {
+
+          const text =
+            row.textContent
+              .toLowerCase();
+
+
+          row.style.display =
+            text.includes(term)
+              ? ''
+              : 'none';
+
+        });
+
+    }
+  );
+
+}
+
+
+/* =========================
+   INITIAL LOAD
+========================= */
+
+loadDash();
+
+</script>
+
+</body>
+</html>

@@ -1,0 +1,35 @@
+name: customer_app
+description: PVL Mart Customer App
+publish_to: 'none'
+version: 1.1.0+2
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  http: ^1.1.0
+  shared_preferences: ^2.2.0
+  provider: ^6.0.0
+  google_fonts: ^6.0.0
+  razorpay_flutter: ^1.4.6
+  socket_io_client: ^2.0.3+1
+
+  # For live tracking map
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.0
+
+  # Firebase (Google Sign-In ready; not fully configured yet)
+  firebase_core: ^2.24.2
+  firebase_auth: ^4.17.4
+  google_sign_in: ^6.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

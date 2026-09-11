@@ -1,0 +1,1580 @@
+﻿import 'dart:convert';
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+void main() => runApp(const StoreDashboardApp());
+
+class StoreDashboardApp extends StatelessWidget {
+  const StoreDashboardApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'PVL Store Dashboard',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1A237E)),
+        scaffoldBackgroundColor: const Color(0xFFF4F6FA),
+      ),
+      home: const LoginPage(),
+    );
+  }
+}
+
+// ============================================================
+// LOGIN PAGE
+// ============================================================
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final _storeIdController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _loading = false;
+  String _error = '';
+
+  Future<void> _login() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost:5000/api/store/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'storeId': int.tryParse(_storeIdController.text) ?? 0,
+          'password': _passwordController.text,
+        }),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => DashboardPage(storeId: data['storeId'])),
+          );
+          return;
+        }
+      }
+      setState(() { _error = 'Invalid credentials'; });
+    } catch (e) {
+      setState(() { _error = 'Server error: $e'; });
+    } finally {
+      setState(() { _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('PVL Commerce', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              const Text('Store Dashboard', style: TextStyle(fontSize: 16, color: Colors.grey)),
+              const SizedBox(height: 32),
+              TextField(
+                controller: _storeIdController,
+                decoration: const InputDecoration(labelText: 'Store ID', border: OutlineInputBorder()),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _passwordController,
+                decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
+                obscureText: true,
+              ),
+              const SizedBox(height: 16),
+              if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _loading ? null : _login,
+                  child: _loading ? const CircularProgressIndicator() : const Text('Login'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// MAIN DASHBOARD (with bottom nav)
+// ============================================================
+class DashboardPage extends StatefulWidget {
+  final int storeId;
+  const DashboardPage({super.key, required this.storeId});
+
+  @override
+  State<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends State<DashboardPage> {
+  int _currentIndex = 0;
+  final List<Widget> _tabs = [];
+  late final StoreService _storeService;
+  String _storeName = 'Store';
+
+  @override
+  void initState() {
+    super.initState();
+    _storeService = StoreService(widget.storeId);
+    _loadStoreName();
+    _tabs.addAll([
+      DashboardTab(storeId: widget.storeId, service: _storeService),
+      OrdersTab(storeId: widget.storeId, service: _storeService),
+      ProductsTab(storeId: widget.storeId, service: _storeService),
+      InventoryTab(storeId: widget.storeId, service: _storeService),
+      ProfileTab(storeId: widget.storeId, service: _storeService),
+    ]);
+  }
+
+  Future<void> _loadStoreName() async {
+    try {
+      final data = await _storeService.getProfile();
+      setState(() {
+        _storeName = data['name'] ?? 'Store';
+      });
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_storeName),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.notifications_outlined),
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => NotificationsPage(storeId: widget.storeId)));
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () {
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+            },
+          ),
+        ],
+      ),
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _tabs,
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: (i) => setState(() => _currentIndex = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
+          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Orders'),
+          NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Products'),
+          NavigationDestination(icon: Icon(Icons.warehouse_outlined), label: 'Inventory'),
+          NavigationDestination(icon: Icon(Icons.person_outlined), label: 'Profile'),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// SERVICE CLASS (handles all API calls)
+// ============================================================
+class StoreService {
+  final int storeId;
+  final String baseUrl = 'http://localhost:5000/api/store';
+
+  StoreService(this.storeId);
+
+  Map<String, String> get _headers => {'Content-Type': 'application/json'};
+
+  Future<Map<String, dynamic>> getDashboard() async {
+    final res = await http.get(Uri.parse('$baseUrl/dashboard/$storeId'));
+    return jsonDecode(res.body);
+  }
+
+  Future<List<dynamic>> getOrders({String? status}) async {
+    final url = status != null ? '$baseUrl/orders/$storeId?status=$status' : '$baseUrl/orders/$storeId';
+    final res = await http.get(Uri.parse(url));
+    final data = jsonDecode(res.body);
+    return data['orders'] ?? [];
+  }
+
+  Future<void> updateOrderStatus(int orderId, String status) async {
+    await http.put(
+      Uri.parse('$baseUrl/order/$orderId/status'),
+      headers: _headers,
+      body: jsonEncode({'status': status}),
+    );
+  }
+
+  Future<List<dynamic>> getProducts() async {
+    final res = await http.get(Uri.parse('$baseUrl/products/$storeId'));
+    final data = jsonDecode(res.body);
+    return data['products'] ?? [];
+  }
+
+  Future<void> addProduct(Map<String, dynamic> product) async {
+    product['storeId'] = storeId;
+    await http.post(
+      Uri.parse('$baseUrl/product'),
+      headers: _headers,
+      body: jsonEncode(product),
+    );
+  }
+
+  Future<void> updateProduct(int productId, Map<String, dynamic> product) async {
+    await http.put(
+      Uri.parse('$baseUrl/product/$productId'),
+      headers: _headers,
+      body: jsonEncode(product),
+    );
+  }
+
+  Future<void> deleteProduct(int productId) async {
+    await http.delete(Uri.parse('$baseUrl/product/$productId'));
+  }
+
+  Future<List<dynamic>> getInventory() async {
+    final res = await http.get(Uri.parse('$baseUrl/inventory/$storeId'));
+    final data = jsonDecode(res.body);
+    return data['inventory'] ?? [];
+  }
+
+  Future<void> updateInventory(int productId, int stock) async {
+    await http.put(
+      Uri.parse('$baseUrl/inventory/update'),
+      headers: _headers,
+      body: jsonEncode({
+        'storeId': storeId,
+        'productId': productId,
+        'stock': stock,
+      }),
+    );
+  }
+
+  Future<Map<String, dynamic>> getProfile() async {
+    final res = await http.get(Uri.parse('$baseUrl/profile/$storeId'));
+    return jsonDecode(res.body);
+  }
+
+  Future<void> updateProfile(Map<String, dynamic> profile) async {
+    await http.put(
+      Uri.parse('$baseUrl/profile/$storeId'),
+      headers: _headers,
+      body: jsonEncode(profile),
+    );
+  }
+
+  Future<void> toggleOnline(bool online) async {
+    await http.post(
+      Uri.parse('$baseUrl/toggle-online/$storeId'),
+      headers: _headers,
+      body: jsonEncode({'online': online}),
+    );
+  }
+
+  Future<Map<String, dynamic>> getRevenue({String period = 'daily'}) async {
+    final res = await http.get(Uri.parse('$baseUrl/revenue/$storeId?period=$period'));
+    return jsonDecode(res.body);
+  }
+}
+
+// ============================================================
+// DASHBOARD TAB
+// ============================================================
+class DashboardTab extends StatefulWidget {
+  final int storeId;
+  final StoreService service;
+  const DashboardTab({super.key, required this.storeId, required this.service});
+
+  @override
+  State<DashboardTab> createState() => _DashboardTabState();
+}
+
+class _DashboardTabState extends State<DashboardTab> {
+  Map<String, dynamic> _data = {};
+  bool _loading = true;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      _data = await widget.service.getDashboard();
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error.isNotEmpty) return Center(child: Text(_error));
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.5,
+              children: [
+                _kpiCard('Orders', '${_data['total_orders'] ?? 0}', Icons.receipt_long, Colors.blue),
+                _kpiCard('Revenue', 'â‚¹${(_data['today_revenue'] ?? 0).toStringAsFixed(0)}', Icons.attach_money, Colors.green),
+                _kpiCard('Pending Products', '${_data['pending_products'] ?? 0}', Icons.hourglass_empty, Colors.orange),
+                _kpiCard('Low Stock', '${_data['low_stock'] ?? 0}', Icons.warning_amber, Colors.red),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Text('Recent Orders', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            if (_data['recent_orders'] != null && (_data['recent_orders'] as List).isNotEmpty)
+              ...(_data['recent_orders'] as List).take(3).map((order) => _orderTile(order))
+            else
+              const Text('No recent orders'),
+            const SizedBox(height: 20),
+            const Text('Low Stock Alerts', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            if (_data['low_stock_items'] != null && (_data['low_stock_items'] as List).isNotEmpty)
+              ...(_data['low_stock_items'] as List).map((item) => _stockAlertTile(item))
+            else
+              const Text('All stock levels are healthy'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _kpiCard(String title, String value, IconData icon, Color color) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 6),
+              Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ]),
+            Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _orderTile(Map<String, dynamic> order) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.receipt_long),
+        title: Text('#PVL${order['id']}'),
+        subtitle: Text('â‚¹${order['total_amount']} â€¢ ${order['status']}'),
+        trailing: Chip(
+          label: Text(order['status'] ?? 'pending'),
+          backgroundColor: order['status'] == 'delivered' ? Colors.green.shade100 : Colors.orange.shade100,
+        ),
+      ),
+    );
+  }
+
+  Widget _stockAlertTile(Map<String, dynamic> item) {
+    return Card(
+      color: Colors.red.shade50,
+      child: ListTile(
+        leading: const Icon(Icons.warning_amber, color: Colors.red),
+        title: Text(item['name'] ?? 'Product'),
+        subtitle: Text('Stock: ${item['stock']}'),
+        trailing: Text('Low', style: TextStyle(color: Colors.red.shade700)),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// ORDERS TAB
+// ============================================================
+class OrdersTab extends StatefulWidget {
+  final int storeId;
+  final StoreService service;
+
+  const OrdersTab({
+    super.key,
+    required this.storeId,
+    required this.service,
+  });
+
+  @override
+  State<OrdersTab> createState() => _OrdersTabState();
+}
+
+class _OrdersTabState extends State<OrdersTab> {
+  List<dynamic> _orders = [];
+  bool _loading = true;
+  bool _refreshing = false;
+  String _error = '';
+  String _filter = 'all';
+  int? _updatingOrderId;
+  Timer? _refreshTimer;
+  final Set<int> _knownOrderIds = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _silentRefresh(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+
+    try {
+      final status = _filter == 'all' ? null : _filter;
+      final orders = await widget.service.getOrders(status: status);
+
+      if (!mounted) return;
+
+      _knownOrderIds.addAll(
+        orders
+            .map((o) => int.tryParse('${o['id']}'))
+            .whereType<int>(),
+      );
+
+      setState(() {
+        _orders = orders;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _silentRefresh() async {
+    if (!mounted || _refreshing || _loading) return;
+
+    _refreshing = true;
+
+    try {
+      final status = _filter == 'all' ? null : _filter;
+      final orders = await widget.service.getOrders(status: status);
+
+      if (!mounted) return;
+
+      final newPendingOrders = orders.where((order) {
+        final id = int.tryParse('${order['id']}');
+
+        return id != null &&
+            !_knownOrderIds.contains(id) &&
+            (order['status'] ?? 'pending') == 'pending';
+      }).toList();
+
+      _knownOrderIds.addAll(
+        orders
+            .map((o) => int.tryParse('${o['id']}'))
+            .whereType<int>(),
+      );
+
+      setState(() {
+        _orders = orders;
+        _error = '';
+      });
+
+      if (newPendingOrders.isNotEmpty && mounted) {
+        final order = newPendingOrders.first;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 4),
+            content: Text(
+              '🛒 New order #PVL${order['id']} received',
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      // Keep current orders if background refresh fails.
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  Future<void> _updateStatus(int orderId, String status) async {
+    if (_updatingOrderId != null) return;
+
+    setState(() {
+      _updatingOrderId = orderId;
+    });
+
+    try {
+      await widget.service.updateOrderStatus(orderId, status);
+      await _load();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Order #PVL$orderId updated to ${_statusLabel(status)}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update order: $e'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingOrderId = null;
+        });
+      }
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'pending':
+        return 'Pending';
+      case 'accepted':
+        return 'Accepted';
+      case 'preparing':
+        return 'Preparing';
+      case 'ready_for_pickup':
+        return 'Ready for Pickup';
+      case 'out_for_delivery':
+        return 'Out for Delivery';
+      case 'delivered':
+        return 'Delivered';
+      case 'cancelled':
+        return 'Cancelled';
+      default:
+        return status.replaceAll('_', ' ');
+    }
+  }
+
+  String? _nextStatus(String current) {
+    switch (current) {
+      case 'pending':
+        return 'accepted';
+      case 'accepted':
+        return 'preparing';
+      case 'preparing':
+        return 'ready_for_pickup';
+      case 'ready_for_pickup':
+        return 'out_for_delivery';
+      case 'out_for_delivery':
+        return 'delivered';
+      default:
+        return null;
+    }
+  }
+
+  String? _nextButtonText(String current) {
+    switch (current) {
+      case 'pending':
+        return 'Accept Order';
+      case 'accepted':
+        return 'Start Preparing';
+      case 'preparing':
+        return 'Ready for Pickup';
+      case 'ready_for_pickup':
+        return 'Out for Delivery';
+      case 'out_for_delivery':
+        return 'Mark Delivered';
+      default:
+        return null;
+    }
+  }
+
+  Color _statusColor(String? status) {
+    switch (status) {
+      case 'pending':
+        return Colors.orange.shade100;
+      case 'accepted':
+        return Colors.blue.shade100;
+      case 'preparing':
+        return Colors.amber.shade100;
+      case 'ready_for_pickup':
+        return Colors.purple.shade100;
+      case 'out_for_delivery':
+        return Colors.indigo.shade100;
+      case 'delivered':
+        return Colors.green.shade100;
+      case 'cancelled':
+        return Colors.red.shade100;
+      default:
+        return Colors.grey.shade200;
+    }
+  }
+
+  Widget _statusButton(Map<String, dynamic> order) {
+    final orderId = int.tryParse('${order['id']}');
+    final current = order['status'] ?? 'pending';
+    final nextStatus = _nextStatus(current);
+    final buttonText = _nextButtonText(current);
+
+    if (orderId == null || nextStatus == null || buttonText == null) {
+      return const SizedBox.shrink();
+    }
+
+    final isUpdating = _updatingOrderId == orderId;
+
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: isUpdating
+            ? null
+            : () => _updateStatus(orderId, nextStatus),
+        icon: isUpdating
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.arrow_forward),
+        label: Text(
+          isUpdating ? 'Updating...' : buttonText,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              const Text(
+                'Orders',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              if (_refreshing)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              IconButton(
+                tooltip: 'Refresh orders',
+                onPressed: _load,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+        ),
+
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: DropdownButtonFormField<String>(
+            initialValue: _filter,
+            decoration: const InputDecoration(
+              labelText: 'Filter Orders',
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(
+                value: 'all',
+                child: Text('All Orders'),
+              ),
+              DropdownMenuItem(
+                value: 'pending',
+                child: Text('Pending'),
+              ),
+              DropdownMenuItem(
+                value: 'accepted',
+                child: Text('Accepted'),
+              ),
+              DropdownMenuItem(
+                value: 'preparing',
+                child: Text('Preparing'),
+              ),
+              DropdownMenuItem(
+                value: 'ready_for_pickup',
+                child: Text('Ready for Pickup'),
+              ),
+              DropdownMenuItem(
+                value: 'out_for_delivery',
+                child: Text('Out for Delivery'),
+              ),
+              DropdownMenuItem(
+                value: 'delivered',
+                child: Text('Delivered'),
+              ),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+
+              setState(() {
+                _filter = value;
+              });
+
+              _load();
+            },
+          ),
+        ),
+
+        const SizedBox(height: 8),
+
+        Expanded(
+          child: _loading
+              ? const Center(
+                  child: CircularProgressIndicator(),
+                )
+              : _error.isNotEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              size: 48,
+                              color: Colors.red,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _error,
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 12),
+                            ElevatedButton.icon(
+                              onPressed: _load,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Try Again'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _orders.isEmpty
+                      ? const Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.receipt_long_outlined,
+                                size: 60,
+                                color: Colors.grey,
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'No orders',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'New orders will appear automatically.',
+                              ),
+                            ],
+                          ),
+                        )
+                      : RefreshIndicator(
+                          onRefresh: _load,
+                          child: ListView.builder(
+                            padding: const EdgeInsets.all(8),
+                            itemCount: _orders.length,
+                            itemBuilder: (_, index) {
+                              final order = _orders[index];
+                              final status =
+                                  order['status'] ?? 'pending';
+
+                              final isPending = status == 'pending';
+
+                              return Card(
+                                margin: const EdgeInsets.only(
+                                  bottom: 10,
+                                ),
+                                elevation: isPending ? 4 : 1,
+                                color: isPending
+                                    ? Colors.orange.shade50
+                                    : null,
+                                child: ExpansionTile(
+                                  initiallyExpanded: isPending,
+                                  leading: CircleAvatar(
+                                    child: Text(
+                                      '${order['id']}',
+                                    ),
+                                  ),
+                                  title: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '#PVL${order['id']}',
+                                          style: const TextStyle(
+                                            fontWeight:
+                                                FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      if (isPending)
+                                        const Icon(
+                                          Icons.notifications_active,
+                                          color: Colors.orange,
+                                        ),
+                                    ],
+                                  ),
+                                  subtitle: Text(
+                                    '₹${order['total_amount']} • '
+                                    '${order['payment_method']}',
+                                  ),
+                                  trailing: Chip(
+                                    label: Text(
+                                      _statusLabel(status),
+                                    ),
+                                    backgroundColor:
+                                        _statusColor(status),
+                                  ),
+                                  children: [
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.all(16),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Order #PVL${order['id']}',
+                                            style: const TextStyle(
+                                              fontSize: 18,
+                                              fontWeight:
+                                                  FontWeight.bold,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            'Payment: ${order['payment_method'] ?? 'N/A'}',
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            'Total: ₹${order['total_amount'] ?? 0}',
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            'Address: ${order['address'] ?? 'N/A'}',
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            'Created: ${order['created_at'] ?? 'N/A'}',
+                                          ),
+                                          const SizedBox(height: 12),
+                                          const Divider(),
+                                          const Text(
+                                            'Items',
+                                            style: TextStyle(
+                                              fontWeight:
+                                                  FontWeight.bold,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          if (order['items'] is List &&
+                                              (order['items'] as List)
+                                                  .isNotEmpty)
+                                            ...((order['items'] as List)
+                                                .map(
+                                                  (item) => Padding(
+                                                    padding:
+                                                        const EdgeInsets
+                                                            .symmetric(
+                                                      vertical: 3,
+                                                    ),
+                                                    child: Text(
+                                                      '${item['product_name'] ?? item['name'] ?? 'Item'}'
+                                                      ' × ${item['quantity'] ?? 0}'
+                                                      ' — ₹${item['total_price'] ?? item['price'] ?? 0}',
+                                                    ),
+                                                  ),
+                                                ))
+                                          else
+                                            const Text(
+                                              'No item details available',
+                                            ),
+                                          const SizedBox(height: 16),
+                                          _statusButton(order),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================================================
+// PRODUCTS TAB (with approval workflow)
+// ============================================================
+class ProductsTab extends StatefulWidget {
+  final int storeId;
+  final StoreService service;
+  const ProductsTab({super.key, required this.storeId, required this.service});
+
+  @override
+  State<ProductsTab> createState() => _ProductsTabState();
+}
+
+class _ProductsTabState extends State<ProductsTab> {
+  List<dynamic> _products = [];
+  bool _loading = true;
+  String _error = '';
+  String _filter = 'all';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      _products = await widget.service.getProducts();
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _deleteProduct(int id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Product'),
+        content: const Text('Are you sure?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await widget.service.deleteProduct(id);
+      _load();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Deleted')));
+    }
+  }
+
+  List<dynamic> get _filteredProducts {
+    if (_filter == 'all') return _products;
+    return _products.where((p) => (p['approval_status'] ?? 'pending') == _filter).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              const Text('Status:'),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButton<String>(
+                  value: _filter,
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text('All')),
+                    DropdownMenuItem(value: 'pending', child: Text('Pending')),
+                    DropdownMenuItem(value: 'approved', child: Text('Approved')),
+                    DropdownMenuItem(value: 'rejected', child: Text('Rejected')),
+                  ],
+                  onChanged: (v) { setState(() { _filter = v!; }); },
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AddEditProductPage(service: widget.service, onSaved: _load),
+                  ),
+                ),
+              ),
+              IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _error.isNotEmpty
+                  ? Center(child: Text(_error))
+                  : _filteredProducts.isEmpty
+                      ? const Center(child: Text('No products'))
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(8),
+                          itemCount: _filteredProducts.length,
+                          itemBuilder: (_, i) {
+                            final p = _filteredProducts[i];
+                            final status = p['approval_status'] ?? 'pending';
+                            return Card(
+                              child: ListTile(
+                                leading: p['image_url'] != null
+                                    ? Image.network(p['image_url'], width: 50, height: 50, fit: BoxFit.cover)
+                                    : const Icon(Icons.image, size: 50),
+                                title: Text(p['name'] ?? 'Unnamed'),
+                                subtitle: Text('â‚¹${p['price']} â€¢ ${p['unit']}'),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Chip(
+                                      label: Text(status.toUpperCase()),
+                                      backgroundColor: status == 'approved'
+                                          ? Colors.green.shade100
+                                          : status == 'rejected'
+                                              ? Colors.red.shade100
+                                              : Colors.orange.shade100,
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.edit),
+                                      onPressed: () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => AddEditProductPage(
+                                            service: widget.service,
+                                            product: p,
+                                            onSaved: _load,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete, color: Colors.red),
+                                      onPressed: () => _deleteProduct(p['id']),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================================================
+// ADD / EDIT PRODUCT PAGE
+// ============================================================
+class AddEditProductPage extends StatefulWidget {
+  final StoreService service;
+  final Map<String, dynamic>? product;
+  final VoidCallback onSaved;
+
+  const AddEditProductPage({
+    super.key,
+    required this.service,
+    this.product,
+    required this.onSaved,
+  });
+
+  @override
+  State<AddEditProductPage> createState() => _AddEditProductPageState();
+}
+
+class _AddEditProductPageState extends State<AddEditProductPage> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController, _descController, _unitController, _priceController, _mrpController, _imageController;
+  int? _categoryId, _subcategoryId;
+  List<dynamic> _categories = [];
+  List<dynamic> _subcategories = [];
+  bool _loading = false, _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final p = widget.product;
+    _nameController = TextEditingController(text: p?['name'] ?? '');
+    _descController = TextEditingController(text: p?['description'] ?? '');
+    _unitController = TextEditingController(text: p?['unit'] ?? '');
+    _priceController = TextEditingController(text: p?['price']?.toString() ?? '');
+    _mrpController = TextEditingController(text: p?['original_price']?.toString() ?? '');
+    _imageController = TextEditingController(text: p?['image_url'] ?? '');
+    _categoryId = p?['category_id'];
+    _subcategoryId = p?['subcategory_id'];
+    _loadCategories();
+  }
+
+  Future<void> _loadCategories() async {
+    setState(() { _loading = true; });
+    try {
+      final res = await http.get(Uri.parse('http://localhost:5000/api/product-categories'));
+      if (res.statusCode == 200) {
+        _categories = jsonDecode(res.body);
+        if (_categoryId != null) await _loadSubcategories(_categoryId!);
+      }
+    } catch (_) {}
+    setState(() { _loading = false; });
+  }
+
+  Future<void> _loadSubcategories(int categoryId) async {
+    final res = await http.get(Uri.parse('http://localhost:5000/api/subcategories/$categoryId'));
+    if (res.statusCode == 200) {
+      setState(() { _subcategories = jsonDecode(res.body); });
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_categoryId == null || _subcategoryId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select category/subcategory')));
+      return;
+    }
+    setState(() { _submitting = true; });
+    final data = {
+      'categoryId': _categoryId,
+      'subcategoryId': _subcategoryId,
+      'name': _nameController.text.trim(),
+      'description': _descController.text.trim(),
+      'unit': _unitController.text.trim(),
+      'price': double.parse(_priceController.text),
+      'originalPrice': double.tryParse(_mrpController.text) ?? 0,
+      'imageUrl': _imageController.text.trim(),
+    };
+    try {
+      if (widget.product == null) {
+        await widget.service.addProduct(data);
+      } else {
+        await widget.service.updateProduct(widget.product!['id'], data);
+      }
+      widget.onSaved();
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(widget.product == null ? 'Product added, pending approval' : 'Updated, pending approval'),
+      ));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      setState(() { _submitting = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.product == null ? 'Add Product' : 'Edit Product')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Padding(
+              padding: const EdgeInsets.all(16),
+              child: Form(
+                key: _formKey,
+                child: ListView(
+                  children: [
+                    TextFormField(
+                      controller: _nameController,
+                      decoration: const InputDecoration(labelText: 'Product Name'),
+                      validator: (v) => v!.trim().isEmpty ? 'Required' : null,
+                    ),
+                    TextFormField(
+                      controller: _descController,
+                      decoration: const InputDecoration(labelText: 'Description'),
+                      maxLines: 3,
+                    ),
+                    TextFormField(
+                      controller: _unitController,
+                      decoration: const InputDecoration(labelText: 'Unit'),
+                      validator: (v) => v!.trim().isEmpty ? 'Required' : null,
+                    ),
+                    TextFormField(
+                      controller: _priceController,
+                      decoration: const InputDecoration(labelText: 'Price (â‚¹)'),
+                      keyboardType: TextInputType.number,
+                      validator: (v) => v!.trim().isEmpty ? 'Required' : null,
+                    ),
+                    TextFormField(
+                      controller: _mrpController,
+                      decoration: const InputDecoration(labelText: 'MRP (â‚¹)'),
+                      keyboardType: TextInputType.number,
+                    ),
+                    TextFormField(
+                      controller: _imageController,
+                      decoration: const InputDecoration(labelText: 'Image URL'),
+                    ),
+                    DropdownButtonFormField<int>(
+                      decoration: const InputDecoration(labelText: 'Category'),
+                      value: _categoryId,
+                      items: _categories.map((c) {
+                        return DropdownMenuItem<int>(
+                          value: c['id'],
+                          child: Text(c['name']),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        setState(() {
+                          _categoryId = val;
+                          _subcategoryId = null;
+                          _subcategories.clear();
+                        });
+                        if (val != null) _loadSubcategories(val);
+                      },
+                    ),
+                    DropdownButtonFormField<int>(
+                      decoration: const InputDecoration(labelText: 'Subcategory'),
+                      value: _subcategoryId,
+                      items: _subcategories.map((s) {
+                        return DropdownMenuItem<int>(
+                          value: s['id'],
+                          child: Text(s['name']),
+                        );
+                      }).toList(),
+                      onChanged: (val) => setState(() => _subcategoryId = val),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton(
+                        onPressed: _submitting ? null : _save,
+                        child: _submitting ? const CircularProgressIndicator() : const Text('Save'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+}
+
+// ============================================================
+// INVENTORY TAB
+// ============================================================
+class InventoryTab extends StatefulWidget {
+  final int storeId;
+  final StoreService service;
+  const InventoryTab({super.key, required this.storeId, required this.service});
+
+  @override
+  State<InventoryTab> createState() => _InventoryTabState();
+}
+
+class _InventoryTabState extends State<InventoryTab> {
+  List<dynamic> _items = [];
+  bool _loading = true;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = ''; });
+    try {
+      _items = await widget.service.getInventory();
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _updateStock(int productId, int newStock) async {
+    try {
+      await widget.service.updateInventory(productId, newStock);
+      _load();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Stock updated')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _loading
+        ? const Center(child: CircularProgressIndicator())
+        : _error.isNotEmpty
+            ? Center(child: Text(_error))
+            : ListView.builder(
+                padding: const EdgeInsets.all(8),
+                itemCount: _items.length,
+                itemBuilder: (_, i) {
+                  final item = _items[i];
+                  final isLow = (item['stock_quantity'] ?? 0) <= 5;
+                  return Card(
+                    color: isLow ? Colors.red.shade50 : null,
+                    child: ListTile(
+                      title: Text(item['product_name'] ?? 'Product'),
+                      subtitle: Text('Category: ${item['category_name'] ?? ''}'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Stock: ${item['stock_quantity'] ?? 0}'),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 80,
+                            child: TextField(
+                              decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Qty'),
+                              keyboardType: TextInputType.number,
+                              onSubmitted: (v) {
+                                final qty = int.tryParse(v);
+                                if (qty != null) _updateStock(item['product_id'], qty);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+  }
+}
+
+// ============================================================
+// PROFILE TAB
+// ============================================================
+class ProfileTab extends StatefulWidget {
+  final int storeId;
+  final StoreService service;
+  const ProfileTab({super.key, required this.storeId, required this.service});
+
+  @override
+  State<ProfileTab> createState() => _ProfileTabState();
+}
+
+class _ProfileTabState extends State<ProfileTab> {
+  Map<String, dynamic> _profile = {};
+  bool _loading = true, _editing = false, _saving = false;
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController, _phoneController, _addressController, _deliveryFeeController, _minOrderController;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; });
+    try {
+      _profile = await widget.service.getProfile();
+      _nameController = TextEditingController(text: _profile['name'] ?? '');
+      _phoneController = TextEditingController(text: _profile['phone'] ?? '');
+      _addressController = TextEditingController(text: _profile['address'] ?? '');
+      _deliveryFeeController = TextEditingController(text: _profile['delivery_fee']?.toString() ?? '');
+      _minOrderController = TextEditingController(text: _profile['min_order']?.toString() ?? '');
+      setState(() { _loading = false; });
+    } catch (e) {
+      setState(() { _loading = false; });
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() { _saving = true; });
+    try {
+      await widget.service.updateProfile({
+        'name': _nameController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'address': _addressController.text.trim(),
+        'delivery_fee': double.tryParse(_deliveryFeeController.text) ?? 0,
+        'min_order': double.tryParse(_minOrderController.text) ?? 0,
+      });
+      setState(() { _editing = false; _saving = false; });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated')));
+      _load();
+    } catch (e) {
+      setState(() { _saving = false; });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Form(
+        key: _formKey,
+        child: ListView(
+          children: [
+            Row(
+              children: [
+                const Expanded(child: Text('Store Status:', style: TextStyle(fontWeight: FontWeight.bold))),
+                Switch(
+                  value: _profile['is_online'] ?? false,
+                  onChanged: (v) async {
+                    await widget.service.toggleOnline(v);
+                    _load();
+                  },
+                ),
+                Text(_profile['is_online'] == true ? 'Online' : 'Offline'),
+              ],
+            ),
+            const Divider(),
+            _editing
+                ? Column(
+                    children: [
+                      TextFormField(
+                        controller: _nameController,
+                        decoration: const InputDecoration(labelText: 'Store Name'),
+                        validator: (v) => v!.trim().isEmpty ? 'Required' : null,
+                      ),
+                      TextFormField(
+                        controller: _phoneController,
+                        decoration: const InputDecoration(labelText: 'Phone'),
+                        keyboardType: TextInputType.phone,
+                      ),
+                      TextFormField(
+                        controller: _addressController,
+                        decoration: const InputDecoration(labelText: 'Address'),
+                        maxLines: 2,
+                      ),
+                      TextFormField(
+                        controller: _deliveryFeeController,
+                        decoration: const InputDecoration(labelText: 'Delivery Fee (â‚¹)'),
+                        keyboardType: TextInputType.number,
+                      ),
+                      TextFormField(
+                        controller: _minOrderController,
+                        decoration: const InputDecoration(labelText: 'Minimum Order (â‚¹)'),
+                        keyboardType: TextInputType.number,
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _saving ? null : _save,
+                              child: _saving ? const CircularProgressIndicator() : const Text('Save'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => setState(() { _editing = false; _load(); }),
+                              child: const Text('Cancel'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Name: ${_profile['name'] ?? '-'}', style: const TextStyle(fontSize: 16)),
+                      const SizedBox(height: 8),
+                      Text('Phone: ${_profile['phone'] ?? '-'}'),
+                      const SizedBox(height: 8),
+                      Text('Address: ${_profile['address'] ?? '-'}'),
+                      const SizedBox(height: 8),
+                      Text('Delivery Fee: â‚¹${_profile['delivery_fee'] ?? 0}'),
+                      const SizedBox(height: 8),
+                      Text('Min Order: â‚¹${_profile['min_order'] ?? 0}'),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: () => setState(() { _editing = true; }),
+                        child: const Text('Edit Profile'),
+                      ),
+                    ],
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// NOTIFICATIONS PAGE
+// ============================================================
+class NotificationsPage extends StatelessWidget {
+  final int storeId;
+  const NotificationsPage({super.key, required this.storeId});
+
+  @override
+  Widget build(BuildContext context) {
+    // Mock for now â€“ will integrate real notifications later
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notifications')),
+      body: ListView(
+        children: const [
+          ListTile(
+            leading: Icon(Icons.notifications_active, color: Colors.orange),
+            title: Text('New order #PVL123'),
+            subtitle: Text('Pending confirmation'),
+          ),
+          ListTile(
+            leading: Icon(Icons.warning_amber, color: Colors.red),
+            title: Text('Low stock alert: Milk'),
+            subtitle: Text('Only 3 units left'),
+          ),
+        ],
+      ),
+    );
+  }
+}

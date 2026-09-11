@@ -1,0 +1,1763 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#111827">
+
+<title>PVL Commerce — Store Dashboard</title>
+
+<style>
+*{
+  box-sizing:border-box;
+}
+
+html,
+body{
+  margin:0;
+  padding:0;
+  width:100%;
+  min-height:100%;
+  font-family:Segoe UI,Arial,sans-serif;
+  font-size:14px;
+  background:#f5f7fb;
+  color:#172033;
+  overflow-x:hidden;
+}
+
+body{
+  min-height:100vh;
+}
+
+button,
+input{
+  font-family:inherit;
+}
+
+button{
+  cursor:pointer;
+}
+
+/* =========================
+   MAIN APP
+========================= */
+
+.app{
+  display:flex;
+  min-height:100vh;
+  width:100%;
+}
+
+/* =========================
+   SIDEBAR
+========================= */
+
+aside{
+  width:235px;
+  background:#111827;
+  color:white;
+  padding:22px 14px;
+  position:fixed;
+  top:0;
+  left:0;
+  bottom:0;
+  z-index:100;
+  overflow-y:auto;
+}
+
+.logo{
+  font-size:22px;
+  font-weight:800;
+  padding:5px 10px 25px;
+  white-space:nowrap;
+}
+
+.logo b{
+  color:#60a5fa;
+}
+
+nav{
+  width:100%;
+}
+
+nav button{
+  width:100%;
+  border:0;
+  background:none;
+  color:#cbd5e1;
+  text-align:left;
+  padding:12px;
+  border-radius:9px;
+  margin:3px 0;
+  font-size:14px;
+  min-height:44px;
+}
+
+nav button.active,
+nav button:hover{
+  background:#1f2937;
+  color:#fff;
+}
+
+/* =========================
+   MAIN CONTENT
+========================= */
+
+main{
+  margin-left:235px;
+  width:calc(100% - 235px);
+  min-width:0;
+  padding:25px;
+}
+
+.top{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:15px;
+  margin-bottom:20px;
+}
+
+h1{
+  margin:0;
+  font-size:27px;
+  line-height:1.2;
+}
+
+h2{
+  margin:0;
+}
+
+h3{
+  margin-top:0;
+}
+
+.muted{
+  color:#64748b;
+}
+
+.pill{
+  background:white;
+  border:1px solid #e2e8f0;
+  padding:10px 14px;
+  border-radius:10px;
+  font-weight:600;
+  white-space:nowrap;
+}
+
+/* =========================
+   DASHBOARD CARDS
+========================= */
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:14px;
+}
+
+.card,
+.product{
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  padding:17px;
+  box-shadow:0 3px 12px #00000008;
+  min-width:0;
+}
+
+.metric{
+  font-size:28px;
+  font-weight:800;
+  margin-top:8px;
+  overflow-wrap:anywhere;
+}
+
+.section{
+  margin-top:20px;
+}
+
+.head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  margin-bottom:12px;
+}
+
+/* =========================
+   TABLES
+========================= */
+
+.wrap{
+  width:100%;
+  background:white;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+
+table{
+  width:100%;
+  min-width:620px;
+  border-collapse:collapse;
+}
+
+th,
+td{
+  padding:12px;
+  border-bottom:1px solid #eef2f7;
+  text-align:left;
+  white-space:nowrap;
+}
+
+th{
+  font-size:11px;
+  color:#64748b;
+  text-transform:uppercase;
+  background:#f8fafc;
+}
+
+tr:last-child td{
+  border-bottom:0;
+}
+
+/* =========================
+   BUTTONS
+========================= */
+
+button.action{
+  border:0;
+  background:#111827;
+  color:white;
+  border-radius:7px;
+  padding:9px 12px;
+  margin-right:5px;
+  min-height:38px;
+}
+
+button.action:hover{
+  opacity:.9;
+}
+
+.secondary{
+  background:#e2e8f0!important;
+  color:#172033!important;
+}
+
+.success{
+  background:#15803d!important;
+}
+
+/* =========================
+   STATUS
+========================= */
+
+.status{
+  display:inline-block;
+  padding:5px 9px;
+  border-radius:99px;
+  background:#eef2ff;
+  color:#3730a3;
+  font-weight:700;
+  font-size:11px;
+}
+
+.status.delivered{
+  background:#dcfce7;
+  color:#166534;
+}
+
+.status.cancelled{
+  background:#fee2e2;
+  color:#991b1b;
+}
+
+.status.ready_for_pickup{
+  background:#fef3c7;
+  color:#92400e;
+}
+
+/* =========================
+   ORDER TABS
+========================= */
+
+.tabs{
+  display:flex;
+  gap:7px;
+  flex-wrap:wrap;
+}
+
+.tab{
+  border:1px solid #dbe2ea;
+  background:white;
+  color:#172033;
+  border-radius:8px;
+  padding:9px 12px;
+  min-height:38px;
+}
+
+.tab.active{
+  background:#111827;
+  color:white;
+}
+
+/* =========================
+   PRODUCTS
+========================= */
+
+.products{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:14px;
+}
+
+.stock{
+  font-size:24px;
+  font-weight:800;
+  margin:9px 0;
+}
+
+.low{
+  color:#dc2626;
+}
+
+.ok{
+  color:#15803d;
+}
+
+.stockinput{
+  width:90px;
+  max-width:100%;
+  padding:8px;
+  border:1px solid #cbd5e1;
+  border-radius:7px;
+  font-size:14px;
+}
+
+/* =========================
+   MODAL
+========================= */
+
+.modalbg{
+  display:none;
+  position:fixed;
+  inset:0;
+  background:#0008;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  z-index:1000;
+}
+
+.modalbg.show{
+  display:flex;
+}
+
+.modal{
+  background:white;
+  width:min(620px,100%);
+  max-height:90vh;
+  overflow:auto;
+  border-radius:15px;
+  padding:22px;
+}
+
+.close{
+  float:right;
+  border:0;
+  background:#e2e8f0;
+  padding:7px 10px;
+  border-radius:7px;
+  font-size:16px;
+}
+
+/* =========================
+   ORDER ITEMS
+========================= */
+
+.item{
+  display:flex;
+  justify-content:space-between;
+  gap:15px;
+  padding:10px 0;
+  border-bottom:1px solid #eee;
+}
+
+.item span{
+  overflow-wrap:anywhere;
+}
+
+.empty{
+  text-align:center;
+  padding:30px;
+  color:#64748b;
+}
+
+/* =========================
+   TOAST
+========================= */
+
+.toast{
+  display:none;
+  position:fixed;
+  right:20px;
+  bottom:20px;
+  background:#111827;
+  color:white;
+  padding:12px 16px;
+  border-radius:9px;
+  z-index:2000;
+  max-width:calc(100vw - 40px);
+}
+
+.toast.show{
+  display:block;
+}
+
+/* =========================
+   TABLET
+========================= */
+
+@media(max-width:1000px){
+
+  .grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+  .products{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+  aside{
+    width:190px;
+  }
+
+  main{
+    margin-left:190px;
+    width:calc(100% - 190px);
+    padding:20px;
+  }
+}
+
+/* =========================
+   MOBILE
+========================= */
+
+@media(max-width:700px){
+
+  .app{
+    display:block;
+    width:100%;
+  }
+
+  aside{
+    position:relative;
+    top:auto;
+    left:auto;
+    bottom:auto;
+    width:100%;
+    height:auto;
+    padding:10px;
+    overflow:visible;
+  }
+
+  .logo{
+    font-size:20px;
+    padding:5px 8px 10px;
+    text-align:left;
+  }
+
+  nav{
+    display:flex;
+    width:100%;
+    gap:6px;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    padding-bottom:3px;
+  }
+
+  nav button{
+    flex:0 0 auto;
+    width:auto;
+    min-width:90px;
+    margin:0;
+    padding:10px 12px;
+    text-align:center;
+    font-size:12px;
+  }
+
+  main{
+    margin-left:0;
+    width:100%;
+    padding:15px;
+  }
+
+  .top{
+    flex-direction:column;
+    align-items:stretch;
+    gap:12px;
+  }
+
+  h1{
+    font-size:23px;
+  }
+
+  .pill{
+    width:100%;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+
+  .grid{
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+  }
+
+  .products{
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+  }
+
+  .card,
+  .product{
+    padding:13px;
+  }
+
+  .metric{
+    font-size:23px;
+  }
+
+  .head{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+
+  .head button{
+    width:100%;
+  }
+
+  .tabs{
+    overflow-x:auto;
+    flex-wrap:nowrap;
+    padding-bottom:4px;
+  }
+
+  .tab{
+    flex:0 0 auto;
+    white-space:nowrap;
+  }
+
+  .modalbg{
+    padding:10px;
+  }
+
+  .modal{
+    max-height:92vh;
+    border-radius:12px;
+    padding:16px;
+  }
+
+  .item{
+    align-items:flex-start;
+  }
+
+  button.action{
+    min-height:40px;
+  }
+}
+
+/* =========================
+   SMALL PHONES
+========================= */
+
+@media(max-width:430px){
+
+  main{
+    padding:12px;
+  }
+
+  .grid,
+  .products{
+    grid-template-columns:1fr;
+  }
+
+  .logo{
+    text-align:center;
+  }
+
+  nav button{
+    min-width:85px;
+    font-size:11px;
+    padding:9px 10px;
+  }
+
+  .metric{
+    font-size:26px;
+  }
+
+  .card,
+  .product{
+    padding:15px;
+  }
+
+  .item{
+    flex-direction:column;
+    gap:5px;
+  }
+
+  .modal{
+    padding:14px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <aside>
+
+    <div class="logo">
+      PVL <b>Commerce</b>
+    </div>
+
+    <nav>
+      <button class="active" onclick="show('dashboard',this)">
+        📊 Dashboard
+      </button>
+
+      <button onclick="show('orders',this)">
+        📦 Orders
+      </button>
+
+      <button onclick="show('products',this)">
+        🛒 Products
+      </button>
+
+      <button onclick="show('inventory',this)">
+        📋 Inventory
+      </button>
+
+      <button onclick="show('store',this)">
+        🏪 Store
+      </button>
+    </nav>
+
+  </aside>
+
+  <main>
+
+    <div class="top">
+
+      <div>
+        <h1 id="title">Store Dashboard</h1>
+        <p class="muted">Orders, products and inventory</p>
+      </div>
+
+      <div class="pill">
+        🏪 <span id="storeName">Loading...</span>
+      </div>
+
+    </div>
+
+
+    <!-- =========================
+         DASHBOARD
+    ========================== -->
+
+    <section id="dashboard" class="page">
+
+      <div class="grid">
+
+        <div class="card">
+          <span class="muted">Total Orders</span>
+          <div class="metric" id="total">—</div>
+        </div>
+
+        <div class="card">
+          <span class="muted">Active Orders</span>
+          <div class="metric" id="active">—</div>
+        </div>
+
+        <div class="card">
+          <span class="muted">Ready for Pickup</span>
+          <div class="metric" id="ready">—</div>
+        </div>
+
+        <div class="card">
+          <span class="muted">Completed</span>
+          <div class="metric" id="completed">—</div>
+        </div>
+
+      </div>
+
+
+      <div class="grid section">
+
+        <div class="card">
+          <span class="muted">Total Sales</span>
+          <div class="metric" id="sales">₹0</div>
+        </div>
+
+        <div class="card">
+          <span class="muted">Products</span>
+          <div class="metric" id="pc">—</div>
+        </div>
+
+        <div class="card">
+          <span class="muted">Low Stock</span>
+          <div class="metric" id="low">—</div>
+        </div>
+
+        <div class="card">
+          <span class="muted">Store Status</span>
+          <div class="metric" style="font-size:18px">
+            🟢 Online
+          </div>
+        </div>
+
+      </div>
+
+
+      <div class="section">
+
+        <div class="head">
+
+          <h2>Recent Orders</h2>
+
+          <button class="action" onclick="showName('orders')">
+            View all
+          </button>
+
+        </div>
+
+        <div id="recent"></div>
+
+      </div>
+
+    </section>
+
+
+    <!-- =========================
+         ORDERS
+    ========================== -->
+
+    <section id="orders" class="page" style="display:none">
+
+      <div class="head">
+
+        <h2>Orders</h2>
+
+        <button class="action secondary" onclick="loadAll()">
+          ↻ Refresh
+        </button>
+
+      </div>
+
+
+      <div class="tabs">
+
+        <button class="tab active" onclick="filter('all',this)">
+          All
+        </button>
+
+        <button class="tab" onclick="filter('pending',this)">
+          New
+        </button>
+
+        <button class="tab" onclick="filter('preparing',this)">
+          Preparing
+        </button>
+
+        <button class="tab" onclick="filter('ready_for_pickup',this)">
+          Ready
+        </button>
+
+        <button class="tab" onclick="filter('delivered',this)">
+          Delivered
+        </button>
+
+      </div>
+
+
+      <div class="section" id="orderTable"></div>
+
+    </section>
+
+
+    <!-- =========================
+         PRODUCTS
+    ========================== -->
+
+    <section id="products" class="page" style="display:none">
+
+      <div class="head">
+
+        <h2>Products</h2>
+
+        <button class="action secondary" onclick="loadProducts()">
+          ↻ Refresh
+        </button>
+
+      </div>
+
+      <div class="products section" id="productGrid"></div>
+
+    </section>
+
+
+    <!-- =========================
+         INVENTORY
+    ========================== -->
+
+    <section id="inventory" class="page" style="display:none">
+
+      <div class="head">
+
+        <h2>Inventory</h2>
+
+        <button class="action secondary" onclick="loadProducts()">
+          ↻ Refresh
+        </button>
+
+      </div>
+
+      <div class="products section" id="inventoryGrid"></div>
+
+    </section>
+
+
+    <!-- =========================
+         STORE
+    ========================== -->
+
+    <section id="store" class="page" style="display:none">
+
+      <div class="card">
+
+        <h2>Store Information</h2>
+
+        <div id="storeInfo" class="section">
+          Loading...
+        </div>
+
+      </div>
+
+    </section>
+
+  </main>
+
+</div>
+
+
+<!-- =========================
+     ORDER MODAL
+========================== -->
+
+<div class="modalbg" id="modal">
+
+  <div class="modal">
+
+    <button class="close" onclick="closeModal()">
+      ✕
+    </button>
+
+    <h2 id="mtitle"></h2>
+
+    <div id="mbody"></div>
+
+  </div>
+
+</div>
+
+
+<div id="toast" class="toast"></div>
+
+
+<script>
+
+/* =========================
+   CONFIGURATION
+========================= */
+
+const API = 'http://192.168.0.105:5000/api/store';
+
+const SID = 1;
+
+let orders = [];
+
+let products = [];
+
+let flt = 'all';
+
+
+/* =========================
+   HELPERS
+========================= */
+
+const $ = id => document.getElementById(id);
+
+
+const money = v =>
+  '₹' +
+  Number(v || 0).toLocaleString('en-IN', {
+    maximumFractionDigits:2
+  });
+
+
+const esc = s =>
+  String(s ?? '').replace(
+    /[&<>"']/g,
+    c => ({
+      '&':'&amp;',
+      '<':'&lt;',
+      '>':'&gt;',
+      '"':'&quot;',
+      "'":'&#39;'
+    }[c])
+  );
+
+
+const stat = s =>
+  '<span class="status ' +
+  esc(s) +
+  '">' +
+  esc(
+    String(s || '')
+      .replaceAll('_',' ')
+      .toUpperCase()
+  ) +
+  '</span>';
+
+
+/* =========================
+   API
+========================= */
+
+async function api(path, options = {}){
+
+  try{
+
+    const response = await fetch(
+      API + path,
+      {
+        headers:{
+          'Content-Type':'application/json'
+        },
+        ...options
+      }
+    );
+
+    const data =
+      await response
+        .json()
+        .catch(() => ({}));
+
+    if(!response.ok){
+
+      throw new Error(
+        data.message ||
+        'Request failed'
+      );
+
+    }
+
+    return data;
+
+  }catch(error){
+
+    console.error(
+      'API Error:',
+      error
+    );
+
+    throw error;
+
+  }
+
+}
+
+
+/* =========================
+   TOAST
+========================= */
+
+function toast(message){
+
+  const element = $('toast');
+
+  element.textContent = message;
+
+  element.classList.add('show');
+
+  setTimeout(
+    () => element.classList.remove('show'),
+    2200
+  );
+
+}
+
+
+/* =========================
+   PAGE NAVIGATION
+========================= */
+
+function show(name, button){
+
+  document
+    .querySelectorAll('.page')
+    .forEach(page => {
+      page.style.display = 'none';
+    });
+
+  $(name).style.display = 'block';
+
+
+  document
+    .querySelectorAll('nav button')
+    .forEach(item => {
+      item.classList.remove('active');
+    });
+
+
+  if(button){
+
+    button.classList.add('active');
+
+  }
+
+
+  $('title').textContent =
+    name === 'dashboard'
+      ? 'Store Dashboard'
+      : name.charAt(0).toUpperCase() +
+        name.slice(1);
+
+
+  if(name === 'orders'){
+    renderOrders();
+  }
+
+  if(name === 'products'){
+    renderProducts();
+  }
+
+  if(name === 'inventory'){
+    renderInventory();
+  }
+
+  if(name === 'store'){
+    loadStore();
+  }
+
+}
+
+
+function showName(name){
+
+  const button =
+    [...document.querySelectorAll('nav button')]
+      .find(
+        x =>
+          x.textContent
+            .toLowerCase()
+            .includes(name)
+      );
+
+  show(name, button);
+
+}
+
+
+/* =========================
+   DASHBOARD
+========================= */
+
+async function loadDash(){
+
+  try{
+
+    const data =
+      await api('/dashboard/' + SID);
+
+    const x = data.dashboard;
+
+    $('total').textContent =
+      x.total_orders || 0;
+
+    $('active').textContent =
+      x.active_orders || 0;
+
+    $('ready').textContent =
+      x.ready_orders || 0;
+
+    $('completed').textContent =
+      x.completed_orders || 0;
+
+    $('sales').textContent =
+      money(x.total_sales);
+
+    $('pc').textContent =
+      x.total_products || 0;
+
+    $('low').textContent =
+      x.low_stock_products || 0;
+
+  }catch(error){
+
+    toast(error.message);
+
+  }
+
+}
+
+
+/* =========================
+   ORDERS
+========================= */
+
+async function loadOrders(){
+
+  try{
+
+    orders =
+      (await api('/orders/' + SID))
+        .orders || [];
+
+    renderRecent();
+
+    renderOrders();
+
+  }catch(error){
+
+    toast(error.message);
+
+  }
+
+}
+
+
+function count(order){
+
+  return (order.items || [])
+    .reduce(
+      (total,item) =>
+        total +
+        Number(item.quantity || 0),
+      0
+    );
+
+}
+
+
+function row(order, manage = true){
+
+  return `
+    <tr>
+
+      <td>#PVL${order.id}</td>
+
+      <td>${count(order)}</td>
+
+      <td>${money(order.total_amount)}</td>
+
+      <td>${stat(order.status)}</td>
+
+      <td>
+        ${
+          manage
+            ? `
+              <button
+                class="action"
+                onclick="openOrder(${order.id})">
+                Manage
+              </button>
+            `
+            : ''
+        }
+      </td>
+
+    </tr>
+  `;
+
+}
+
+
+function renderRecent(){
+
+  const list =
+    orders.slice(0,5);
+
+  $('recent').innerHTML =
+    list.length
+
+      ? `
+        <div class="wrap">
+
+          <table>
+
+            <thead>
+
+              <tr>
+                <th>Order</th>
+                <th>Items</th>
+                <th>Total</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+
+            </thead>
+
+            <tbody>
+              ${list.map(row).join('')}
+            </tbody>
+
+          </table>
+
+        </div>
+      `
+
+      : `
+        <div class="card empty">
+          No orders yet.
+        </div>
+      `;
+
+}
+
+
+function renderOrders(){
+
+  const list =
+    flt === 'all'
+      ? orders
+      : orders.filter(
+          order =>
+            order.status === flt
+        );
+
+
+  $('orderTable').innerHTML =
+    list.length
+
+      ? `
+        <div class="wrap">
+
+          <table>
+
+            <thead>
+
+              <tr>
+                <th>Order</th>
+                <th>Items</th>
+                <th>Total</th>
+                <th>Payment</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+
+            </thead>
+
+            <tbody>
+
+              ${list.map(order => `
+
+                <tr>
+
+                  <td>#PVL${order.id}</td>
+
+                  <td>${count(order)}</td>
+
+                  <td>${money(order.total_amount)}</td>
+
+                  <td>
+                    ${esc(order.payment_method || '—')}
+                  </td>
+
+                  <td>
+                    ${stat(order.status)}
+                  </td>
+
+                  <td>
+
+                    <button
+                      class="action"
+                      onclick="openOrder(${order.id})">
+                      Manage
+                    </button>
+
+                  </td>
+
+                </tr>
+
+              `).join('')}
+
+            </tbody>
+
+          </table>
+
+        </div>
+      `
+
+      : `
+        <div class="card empty">
+          No orders in this category.
+        </div>
+      `;
+
+}
+
+
+function filter(status, button){
+
+  flt = status;
+
+  document
+    .querySelectorAll('.tab')
+    .forEach(item => {
+      item.classList.remove('active');
+    });
+
+  button.classList.add('active');
+
+  renderOrders();
+
+}
+
+
+/* =========================
+   ORDER DETAILS
+========================= */
+
+async function openOrder(id){
+
+  try{
+
+    const data =
+      await api('/order/' + id);
+
+    const order =
+      data.order;
+
+
+    $('mtitle').textContent =
+      '#PVL' +
+      order.id +
+      ' — Order Details';
+
+
+    let actions = '';
+
+
+    if(order.status === 'pending'){
+
+      actions = `
+
+        <button
+          class="action success"
+          onclick="updateStatus(${id},'accepted')">
+          Accept Order
+        </button>
+
+        <button
+          class="action"
+          onclick="updateStatus(${id},'cancelled')">
+          Cancel
+        </button>
+
+      `;
+
+    }
+
+    else if(order.status === 'accepted'){
+
+      actions = `
+
+        <button
+          class="action"
+          onclick="updateStatus(${id},'preparing')">
+          Start Preparing
+        </button>
+
+      `;
+
+    }
+
+    else if(order.status === 'preparing'){
+
+      actions = `
+
+        <button
+          class="action"
+          onclick="updateStatus(${id},'ready_for_pickup')">
+          Ready for Pickup
+        </button>
+
+      `;
+
+    }
+
+
+    $('mbody').innerHTML = `
+
+      <p>
+        ${stat(order.status)}
+        &nbsp;
+        <b>${money(order.total_amount)}</b>
+      </p>
+
+      <p class="muted">
+        Payment:
+        ${esc(order.payment_method || '—')}
+        ·
+        ${esc(order.payment_status || '—')}
+      </p>
+
+      <h3>Items</h3>
+
+      ${
+        (order.items || [])
+          .map(item => `
+
+            <div class="item">
+
+              <span>
+                ${esc(item.product_name)}
+                × ${item.quantity}
+              </span>
+
+              <b>
+                ${money(item.total_price)}
+              </b>
+
+            </div>
+
+          `)
+          .join('')
+      }
+
+      <div class="section">
+        ${actions}
+      </div>
+
+    `;
+
+
+    $('modal')
+      .classList
+      .add('show');
+
+
+  }catch(error){
+
+    toast(error.message);
+
+  }
+
+}
+
+
+async function updateStatus(id, status){
+
+  try{
+
+    await api(
+      '/order/' + id + '/status',
+      {
+        method:'PUT',
+
+        body:JSON.stringify({
+          status:status
+        })
+      }
+    );
+
+
+    closeModal();
+
+    toast('Order updated');
+
+    await loadAll();
+
+  }catch(error){
+
+    toast(error.message);
+
+  }
+
+}
+
+
+function closeModal(){
+
+  $('modal')
+    .classList
+    .remove('show');
+
+}
+
+
+/* =========================
+   PRODUCTS
+========================= */
+
+async function loadProducts(){
+
+  try{
+
+    products =
+      (await api('/products/' + SID))
+        .products || [];
+
+    renderProducts();
+
+    renderInventory();
+
+  }catch(error){
+
+    toast(error.message);
+
+  }
+
+}
+
+
+function card(product, edit){
+
+  const quantity =
+    Number(
+      product.stock_quantity || 0
+    );
+
+
+  return `
+
+    <div class="product">
+
+      <h3>
+        ${esc(product.name)}
+      </h3>
+
+      <div class="muted">
+
+        ${esc(product.unit || '')}
+        ·
+        ${money(product.price)}
+
+      </div>
+
+      <div
+        class="stock ${
+          quantity <= 5
+            ? 'low'
+            : 'ok'
+        }">
+
+        ${quantity}
+
+        <span class="muted">
+          in stock
+        </span>
+
+      </div>
+
+      ${
+        edit
+
+          ? `
+
+            <input
+              class="stockinput"
+              id="s${product.id}"
+              type="number"
+              min="0"
+              value="${quantity}"
+            >
+
+            <button
+              class="action"
+              onclick="saveStock(${product.id})">
+              Save
+            </button>
+
+          `
+
+          : ''
+      }
+
+    </div>
+
+  `;
+
+}
+
+
+function renderProducts(){
+
+  $('productGrid').innerHTML =
+    products.length
+
+      ? products
+          .map(
+            product =>
+              card(product,false)
+          )
+          .join('')
+
+      : `
+        <div class="card empty">
+          No products found.
+        </div>
+      `;
+
+}
+
+
+function renderInventory(){
+
+  $('inventoryGrid').innerHTML =
+    products.length
+
+      ? products
+          .map(
+            product =>
+              card(product,true)
+          )
+          .join('')
+
+      : `
+        <div class="card empty">
+          No inventory found.
+        </div>
+      `;
+
+}
+
+
+async function saveStock(id){
+
+  try{
+
+    const quantity =
+      Number(
+        $('s' + id).value
+      );
+
+
+    await api(
+      '/inventory',
+      {
+        method:'PUT',
+
+        body:JSON.stringify({
+          store_id:SID,
+          product_id:id,
+          quantity:quantity
+        })
+      }
+    );
+
+
+    toast('Stock updated');
+
+    await loadProducts();
+
+    await loadDash();
+
+  }catch(error){
+
+    toast(error.message);
+
+  }
+
+}
+
+
+/* =========================
+   STORE
+========================= */
+
+async function loadStore(){
+
+  try{
+
+    const data =
+      await api('/info/' + SID);
+
+    const store =
+      data.store;
+
+
+    $('storeName').textContent =
+      store.name ||
+      'PVL Store';
+
+
+    $('storeInfo').innerHTML = `
+
+      <p>
+        <b>Name:</b>
+        ${esc(store.name || '—')}
+      </p>
+
+      <p>
+        <b>Store ID:</b>
+        ${store.id}
+      </p>
+
+      <p>
+        <b>Address:</b>
+        ${esc(
+          store.address ||
+          store.location ||
+          'Not configured'
+        )}
+      </p>
+
+      <p>
+        <b>Phone:</b>
+        ${esc(
+          store.phone ||
+          'Not configured'
+        )}
+      </p>
+
+    `;
+
+  }catch(error){
+
+    toast(error.message);
+
+  }
+
+}
+
+
+/* =========================
+   LOAD EVERYTHING
+========================= */
+
+async function loadAll(){
+
+  await Promise.all([
+    loadDash(),
+    loadOrders(),
+    loadProducts(),
+    loadStore()
+  ]);
+
+}
+
+
+/* =========================
+   START
+========================= */
+
+loadAll();
+
+</script>
+
+</body>
+</html>
