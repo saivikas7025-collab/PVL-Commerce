@@ -1,3 +1,4 @@
+const bcrypt = require('bcryptjs');
 const express = require("express");
 const { Pool } = require("pg");
 
@@ -83,8 +84,11 @@ router.post("/login", async (req, res) => {
     }
 
     const driver = result.rows[0];
+    const validPassword = driver.password_hash
+      ? await bcrypt.compare(String(password), String(driver.password_hash))
+      : false;
 
-    if (String(driver.password_hash || "") !== String(password)) {
+    if (!validPassword) {
       return res.status(401).json({
         success: false,
         message: "Invalid delivery partner credentials",
