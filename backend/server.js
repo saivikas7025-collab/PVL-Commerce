@@ -1,10 +1,10 @@
-/**
+﻿/**
  * PVL Commerce backend
  *
  * Ordering matters:
  *   1. helmet
  *   2. cors
- *   3. Razorpay webhook (uses express.raw — MUST come before express.json)
+ *   3. Razorpay webhook (uses express.raw - MUST come before express.json)
  *   4. express.json for the rest of the API
  */
 
@@ -19,6 +19,7 @@ const { testDatabaseConnection } = require('./db');
 const { handleWebhook: razorpayWebhook } = require('./routes/razorpayWebhook');
 
 const authRoutes = require('./routes/auth');
+const googleAuthRoutes = require('./routes/googleAuth');
 const addressRoutes = require('./routes/addresses');
 const productRoutes = require('./routes/products');
 const cartRoutes = require('./routes/cart');
@@ -99,6 +100,7 @@ app.get('/api/health', (req, res) =>
 
 // ---- API routes --------------------------------------------
 app.use('/api/auth', authRoutes);
+app.use('/api/auth', googleAuthRoutes);
 app.use('/api/addresses', addressRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);

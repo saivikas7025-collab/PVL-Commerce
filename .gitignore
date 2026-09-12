@@ -26,3 +26,6 @@ Thumbs.db
 
 # Allow production env template to be committed
 !backend/.env.production.example
+
+# Firebase service account (never commit)
+backend/secrets/
