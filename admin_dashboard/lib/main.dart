@@ -265,7 +265,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final orders = data['orders'] ?? data['data'] ?? [];
+        final orders = data['rows'] ?? data['orders'] ?? data['data'] ?? [];
         if (orders is List) {
           setState(() {
             _orders = orders;
@@ -284,7 +284,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       );
       if (dashResponse.statusCode == 200) {
         final dashData = jsonDecode(dashResponse.body);
-        final orders2 = dashData['orders'] ?? dashData['recent_orders'] ?? [];
+        final orders2 = dashData['recent_orders'] ?? dashData['rows'] ?? dashData['orders'] ?? [];
         setState(() {
           _orders = orders2;
           _extractStoresAndDrivers(orders2);
