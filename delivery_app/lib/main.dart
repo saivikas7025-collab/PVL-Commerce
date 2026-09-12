@@ -741,7 +741,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
   bool _isOrderAccepted(Map<String, dynamic> order) {
     return order['status'] == 'ready_for_pickup' &&
-        (order['assignment_status'] == 'accepted' || order['assignment_status'] == true);
+        (order['assignment_status'] == 'accepted' || order['assignment_status'] == 'assigned' || order['assignment_status'] == true);
   }
 
   Future<void> _accept() async {
@@ -795,12 +795,12 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
     final status = _order['status'] ?? 'pending';
     final total = _order['total_amount'] ?? 0;
-    final address = _order['full_address'] ?? _order['address'] ?? '';
+    final address = _order['full_address'] ?? _order['address'] ?? _order['store_location'] ?? '';
     final isAccepted = _isOrderAccepted(_order);
 
     // Try to get customer name and phone – adjust field names based on debug output
-    final customerName = _order['customer_name'] ?? _order['name'] ?? _order['customer']?['name'] ?? '';
-    final customerPhone = _order['customer_phone'] ?? _order['phone'] ?? _order['customer']?['phone'] ?? '';
+    final customerName = _order['customer_name'] ?? _order['name'] ?? _order['customer']?['name'] ?? _order['store_name'] ?? '';
+    final customerPhone = _order['customer_phone'] ?? _order['phone'] ?? _order['customer']?['phone'] ?? _order['store_phone'] ?? '';
 
     return Scaffold(
       appBar: AppBar(title: Text('#PVL${widget.orderId}')),
