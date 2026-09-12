@@ -1,15 +1,8 @@
-﻿const express = require("express");
+const express = require("express");
 const router = express.Router();
 
-const { Pool } = require("pg");
-
-const pool = new Pool({
-  host: process.env.DB_HOST || "localhost",
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || "pvl_commerce",
-  user: process.env.DB_USER || "postgres",
-  password: process.env.DB_PASSWORD,
-});
+// Reuse the shared pool from ../db (supports DATABASE_URL + SSL for Render)
+const { pool } = require('../db');
 
 /*
 ========================================================

@@ -1,16 +1,9 @@
 const bcrypt = require('bcryptjs');
 const express = require("express");
-const { Pool } = require("pg");
-
 const router = express.Router();
 
-const pool = new Pool({
-  host: process.env.DB_HOST || "localhost",
-  port: Number(process.env.DB_PORT || 5432),
-  user: process.env.DB_USER || "postgres",
-  password: process.env.DB_PASSWORD || process.env.PG_PASSWORD,
-  database: process.env.DB_NAME || "pvl_commerce",
-});
+// Reuse the shared pool from ../db (supports DATABASE_URL + SSL for Render)
+const { pool } = require('../db');
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
