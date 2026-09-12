@@ -281,7 +281,7 @@ router.get("/orders/:partnerId", async (req, res) => {
 
         s.name AS store_name,
         s.phone AS store_phone,
-        s.location AS store_location
+        s.address AS store_location
 
       FROM orders o
 
@@ -353,7 +353,7 @@ router.get("/order/:orderId", async (req, res) => {
 
         s.name AS store_name,
         s.phone AS store_phone,
-        s.location AS store_location,
+        s.address AS store_location,
 
         a.*
 
