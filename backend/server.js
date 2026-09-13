@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PVL Commerce backend
  *
  * Ordering matters:
@@ -19,6 +19,7 @@ const { testDatabaseConnection } = require('./db');
 const { handleWebhook: razorpayWebhook } = require('./routes/razorpayWebhook');
 
 const authRoutes = require('./routes/auth');
+const homeRoutes = require('./routes/home');
 const googleAuthRoutes = require('./routes/googleAuth');
 const addressRoutes = require('./routes/addresses');
 const productRoutes = require('./routes/products');
@@ -100,6 +101,7 @@ app.get('/api/health', (req, res) =>
 
 // ---- API routes --------------------------------------------
 app.use('/api/auth', authRoutes);
+app.use('/api/home', homeRoutes);
 app.use('/api/auth', googleAuthRoutes);
 app.use('/api/addresses', addressRoutes);
 app.use('/api/products', productRoutes);
