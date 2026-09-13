@@ -2,13 +2,26 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart' as FA;
+import 'package:google_sign_in/google_sign_in.dart';
+import 'firebase_options.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'config/api_config.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:fl_chart/fl_chart.dart';
 
-void main() => runApp(const AdminApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    debugPrint('[PVL Admin] Firebase initialized');
+  } catch (e) {
+    debugPrint('[PVL Admin] Firebase init failed: $e');
+  }
+  runApp(const AdminApp());
+}
 
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key});
@@ -52,12 +65,13 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
+  bool _googleLoading = false;
   String _error = '';
 
   Future<void> _login() async {
     setState(() { _loading = true; _error = ''; });
     try {
-      // ✅ CORRECT endpoint: /api/auth/login
+      // ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ CORRECT endpoint: /api/auth/login
       final response = await http.post(
         Uri.parse('${ApiConfig.baseUrl}/auth/login'),
         headers: {'Content-Type': 'application/json'},
@@ -135,6 +149,24 @@ class _LoginPageState extends State<LoginPage> {
               SizedBox(
                 width: double.infinity,
                 height: 50,
+                child: OutlinedButton.icon(
+                  onPressed: _googleLoading ? null : _signInWithGoogle,
+                  icon: _googleLoading
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.g_mobiledata, size: 28),
+                  label: Text(_googleLoading ? 'Signing in...' : 'Continue with Google'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Row(children: [
+                Expanded(child: Divider()),
+                Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('OR')),
+                Expanded(child: Divider()),
+              ]),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
                 child: ElevatedButton(
                   onPressed: _loading ? null : _login,
                   child: _loading ? const CircularProgressIndicator() : const Text('Login'),
@@ -145,6 +177,42 @@ class _LoginPageState extends State<LoginPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() { _googleLoading = true; _error = ''; });
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) { return; }
+      final googleAuth = await googleUser.authentication;
+      final cred = FA.GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      final userCred = await FA.FirebaseAuth.instance.signInWithCredential(cred);
+      final idToken = await userCred.user?.getIdToken();
+      if (idToken == null) throw Exception('No Firebase ID token');
+
+      final res = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/auth/admin/google'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'idToken': idToken}),
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (data['success'] == true) {
+        final token = (data['token'] ?? '').toString();
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(
+          builder: (_) => AdminDashboard(token: token),
+        ));
+        return;
+      }
+      setState(() => _error = '${data['message'] ?? 'Not an admin account'}');
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Google sign-in failed: $e');
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
+    }
   }
 }
 
@@ -176,6 +244,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   int _selectedTab = 0;
   String _orderFilter = 'all';
+  List<Map<String, dynamic>> _pendingStores = [];
+  bool _loadingApprovals = false;
 
   Map<String, String> get _headers => {
         'Authorization': 'Bearer ${widget.token}',
@@ -187,6 +257,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     super.initState();
     _connectSocket();
     _loadData();
+    _loadPendingStores();
   }
 
   @override
@@ -304,6 +375,77 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
+  Future<void> _loadPendingStores() async {
+    setState(() => _loadingApprovals = true);
+    try {
+      final res = await http.get(
+        Uri.parse('$_apiBase/admin/stores/pending'),
+        headers: _headers,
+      );
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        final stores = (data['stores'] as List?) ?? [];
+        setState(() {
+          _pendingStores = stores.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          _loadingApprovals = false;
+        });
+      } else {
+        setState(() => _loadingApprovals = false);
+      }
+    } catch (_) {
+      setState(() => _loadingApprovals = false);
+    }
+  }
+
+  Future<void> _approveStore(int storeId) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$_apiBase/admin/stores/$storeId/approve'),
+        headers: _headers,
+        body: jsonEncode({'approvedBy': 'admin'}),
+      );
+      if (res.statusCode == 200 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Store approved')),
+        );
+      }
+      await _loadPendingStores();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _rejectStore(int storeId) async {
+    final ctrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Reject store?'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(labelText: 'Reason (optional)'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()), child: const Text('Reject')),
+        ],
+      ),
+    );
+    if (reason == null) return;
+    try {
+      await http.post(
+        Uri.parse('$_apiBase/admin/stores/$storeId/reject'),
+        headers: _headers,
+        body: jsonEncode({'reason': reason}),
+      );
+      await _loadPendingStores();
+    } catch (_) {}
+  }
+
   void _extractStoresAndDrivers(List<dynamic> orders) {
     final storeMap = <String, Map<String, dynamic>>{};
     final driverMap = <String, Map<String, dynamic>>{};
@@ -342,7 +484,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             selectedIndex: _selectedTab,
             onDestinationSelected: (index) => setState(() => _selectedTab = index),
             labelType: NavigationRailLabelType.selected,
-            destinations: const [
+            destinations: [
               NavigationRailDestination(
                 icon: Icon(Icons.dashboard_outlined),
                 selectedIcon: Icon(Icons.dashboard),
@@ -362,6 +504,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 icon: Icon(Icons.feedback_outlined),
                 selectedIcon: Icon(Icons.feedback),
                 label: Text('Feedback'),
+              ),
+              NavigationRailDestination(
+                icon: Badge(
+                  isLabelVisible: _pendingStores.isNotEmpty,
+                  label: Text('${_pendingStores.length}'),
+                  child: const Icon(Icons.approval_outlined),
+                ),
+                selectedIcon: const Icon(Icons.approval),
+                label: const Text('Approvals'),
               ),
               NavigationRailDestination(
                 icon: Icon(Icons.storefront_outlined),
@@ -389,6 +540,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _buildLiveTracking(),
                 _buildOrders(),
                 _buildFeedback(),
+                _buildStoreApprovals(),
                 _buildStores(),
                 _buildDrivers(),
                 _buildFinance(),
@@ -465,8 +617,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
             children: [
               _metricCard('Total Orders', '$totalOrders', Icons.receipt_long, Colors.blue, 200),
               _metricCard('Pending', '$pendingOrders', Icons.pending, Colors.orange, 200),
-              _metricCard('Today\'s Sales', '₹${todaySales.toStringAsFixed(2)}', Icons.attach_money, Colors.green, 200),
-              _metricCard('Revenue', '₹${totalRevenue.toStringAsFixed(2)}', Icons.account_balance, Colors.purple, 200),
+              _metricCard('Today\'s Sales', 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${todaySales.toStringAsFixed(2)}', Icons.attach_money, Colors.green, 200),
+              _metricCard('Revenue', 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${totalRevenue.toStringAsFixed(2)}', Icons.account_balance, Colors.purple, 200),
               _metricCard('Customers', '$customers', Icons.people, Colors.teal, 200),
               _metricCard('Active Deliveries', '$activeDeliveries', Icons.delivery_dining, Colors.red, 200),
             ],
@@ -571,7 +723,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               return DataRow(cells: [
                                 DataCell(Text('#PVL$orderId')),
                                 DataCell(Text(customer)),
-                                DataCell(Text('₹${_parseDouble(order['total_amount']).toStringAsFixed(2)}')),
+                                DataCell(Text('ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${_parseDouble(order['total_amount']).toStringAsFixed(2)}')),
                                 DataCell(_statusChip(status)),
                                 DataCell(Text(order['payment_status'] ?? 'N/A')),
                                 DataCell(Text(order['created_at'] != null ? DateTime.parse(order['created_at']).toLocal().toString().substring(0, 16) : 'N/A')),
@@ -634,20 +786,79 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // ---------- Live Tracking ----------
   Widget _buildLiveTracking() {
-    final markers = _liveLocations.entries.map((entry) {
+    // Build 3 markers per active order: Driver + Customer + Store
+    final markers = <Marker>[];
+    final polylines = <Polyline>[];
+
+    for (final entry in _liveLocations.entries) {
+      final orderId = entry.key;
       final loc = entry.value;
-      return Marker(
-        point: LatLng(loc['lat'] ?? 0.0, loc['lng'] ?? 0.0),
-        width: 80,
-        height: 80,
-        child: Column(
-          children: [
+
+      // Find matching order to get customer + store coords
+      Map<String, dynamic>? order;
+      for (final o in _orders) {
+        if (o['id'] == orderId) { order = Map<String, dynamic>.from(o); break; }
+      }
+
+      // Driver marker (live)
+      final dLat = _parseDouble(loc['lat']);
+      final dLng = _parseDouble(loc['lng']);
+      if (dLat != 0 && dLng != 0) {
+        markers.add(Marker(
+          point: LatLng(dLat, dLng),
+          width: 90,
+          height: 90,
+          child: Column(children: [
             const Icon(Icons.delivery_dining, color: Colors.blue, size: 40),
-            Text('Order #${entry.key}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      );
-    }).toList();
+            Text('Driver #$orderId',
+                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+          ]),
+        ));
+      }
+
+      if (order != null) {
+        // Customer marker
+        final cLat = _parseDouble(order['customer_lat']);
+        final cLng = _parseDouble(order['customer_lng']);
+        if (cLat != 0 && cLng != 0) {
+          markers.add(Marker(
+            point: LatLng(cLat, cLng),
+            width: 90,
+            height: 90,
+            child: const Column(children: [
+              Icon(Icons.location_on, color: Colors.red, size: 40),
+              Text('Customer',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+            ]),
+          ));
+        }
+
+        // Store marker
+        final sLat = _parseDouble(order['store_lat']);
+        final sLng = _parseDouble(order['store_lng']);
+        if (sLat != 0 && sLng != 0) {
+          markers.add(Marker(
+            point: LatLng(sLat, sLng),
+            width: 90,
+            height: 90,
+            child: const Column(children: [
+              Icon(Icons.storefront, color: Colors.green, size: 40),
+              Text('Store',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+            ]),
+          ));
+        }
+
+        // Route: Store ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Driver ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Customer
+        if (cLat != 0 && cLng != 0 && dLat != 0 && dLng != 0) {
+          polylines.add(Polyline(
+            points: [LatLng(dLat, dLng), LatLng(cLat, cLng)],
+            strokeWidth: 3.0,
+            color: Colors.blue.withValues(alpha: 0.6),
+          ));
+        }
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -671,6 +882,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.pvlcommerce.admin',
                 ),
+                PolylineLayer(polylines: polylines),
                 MarkerLayer(markers: markers),
                 RichAttributionWidget(attributions: [TextSourceAttribution('OpenStreetMap contributors')]),
               ],
@@ -695,12 +907,38 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               itemBuilder: (_, i) {
                                 final orderId = _liveLocations.keys.elementAt(i);
                                 final loc = _liveLocations[orderId]!;
-                                return ListTile(
-                                  leading: const Icon(Icons.person_pin_circle, color: Colors.blue),
-                                  title: Text('Order #PVL$orderId'),
-                                  subtitle: Text('Lat: ${loc['lat']?.toStringAsFixed(5)}, Lng: ${loc['lng']?.toStringAsFixed(5)}'),
-                                  trailing: Text('Updated: ${loc['timestamp'] != null ? DateTime.parse(loc['timestamp']).toLocal().toString().substring(11, 16) : 'N/A'}'),
-                                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => OrderDetailPage(orderId: orderId, token: widget.token))),
+                                Map<String, dynamic>? ord;
+                                for (final o in _orders) {
+                                  if (o['id'] == orderId) { ord = Map<String, dynamic>.from(o); break; }
+                                }
+                                final driverName = ord?['driver_name'] ?? 'Driver';
+                                final status = _orderStatuses[orderId] ?? ord?['status'] ?? 'active';
+                                return Card(
+                                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  child: ListTile(
+                                    leading: const CircleAvatar(
+                                      backgroundColor: Colors.blue,
+                                      child: Icon(Icons.delivery_dining, color: Colors.white),
+                                    ),
+                                    title: Text('Order #PVL$orderId  ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢  $driverName',
+                                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('Status: $status'),
+                                        Text('Driver: ${loc['lat']?.toStringAsFixed(4)}, ${loc['lng']?.toStringAsFixed(4)}',
+                                            style: const TextStyle(fontSize: 11)),
+                                        if (ord != null && ord['customer_lat'] != null)
+                                          Text('Customer: ${_parseDouble(ord['customer_lat']).toStringAsFixed(4)}, ${_parseDouble(ord['customer_lng']).toStringAsFixed(4)}',
+                                              style: const TextStyle(fontSize: 11)),
+                                      ],
+                                    ),
+                                    trailing: Text(
+                                      '${loc['timestamp'] != null ? DateTime.parse(loc['timestamp']).toLocal().toString().substring(11, 16) : ''}',
+                                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                    ),
+                                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => OrderDetailPage(orderId: orderId, token: widget.token))),
+                                  ),
                                 );
                               },
                             ),
@@ -759,7 +997,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   child: ListTile(
                     leading: const Icon(Icons.receipt_long),
                     title: Text('#PVL$orderId - $customer'),
-                    subtitle: Text('Total: ₹${_parseDouble(order['total_amount']).toStringAsFixed(2)} • ${order['payment_method'] ?? 'N/A'}'),
+                    subtitle: Text('Total: ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${_parseDouble(order['total_amount']).toStringAsFixed(2)} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ ${order['payment_method'] ?? 'N/A'}'),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -816,7 +1054,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               child: Icon(type == 'customer' ? Icons.person : Icons.delivery_dining),
             ),
             title: Text(f['message'] ?? 'No message'),
-            subtitle: Text('Rating: ${f['rating'] ?? 'N/A'} • ${f['timestamp'] != null ? DateTime.parse(f['timestamp']).toLocal().toString().substring(0, 16) : ''}'),
+            subtitle: Text('Rating: ${f['rating'] ?? 'N/A'} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ ${f['timestamp'] != null ? DateTime.parse(f['timestamp']).toLocal().toString().substring(0, 16) : ''}'),
           ),
         );
       },
@@ -824,6 +1062,94 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   // ---------- Stores ----------
+  // ---------- Store Approvals ----------
+  Widget _buildStoreApprovals() {
+    if (_loadingApprovals) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Store Approvals'),
+        actions: [
+          IconButton(onPressed: _loadPendingStores, icon: const Icon(Icons.refresh)),
+        ],
+      ),
+      body: _pendingStores.isEmpty
+          ? const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.check_circle_outline, size: 60, color: Colors.green),
+                  SizedBox(height: 12),
+                  Text('No pending store applications'),
+                ],
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: _pendingStores.length,
+              itemBuilder: (_, i) {
+                final s = _pendingStores[i];
+                final lat = s['latitude'];
+                final lng = s['longitude'];
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          const Icon(Icons.storefront, color: Colors.orange),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(s['name'] ?? 'Unnamed',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade100,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text('PENDING', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          ),
+                        ]),
+                        const SizedBox(height: 8),
+                        Text('Email: ${s['email'] ?? '-'}'),
+                        Text('Phone: ${s['phone'] ?? '-'}'),
+                        Text('Address: ${s['address'] ?? 'Not set'}', maxLines: 2, overflow: TextOverflow.ellipsis),
+                        if (lat != null && lng != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text('GPS: $lat, $lng',
+                                style: const TextStyle(fontSize: 11, color: Colors.green)),
+                          ),
+                        const SizedBox(height: 12),
+                        Row(children: [
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: () => _approveStore(s['id'] as int),
+                              icon: const Icon(Icons.check),
+                              label: const Text('Approve'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _rejectStore(s['id'] as int),
+                              icon: const Icon(Icons.close, color: Colors.red),
+                              label: const Text('Reject', style: TextStyle(color: Colors.red)),
+                            ),
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+
   Widget _buildStores() {
     return Scaffold(
       appBar: AppBar(
@@ -874,7 +1200,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   child: ListTile(
                     leading: CircleAvatar(child: Icon(Icons.person, color: isOnline ? Colors.green : Colors.grey)),
                     title: Text(driver['name'] ?? 'Driver #${driver['id']}'),
-                    subtitle: Text('Phone: ${driver['phone'] ?? 'N/A'} • ${isOnline ? 'Online' : 'Offline'}'),
+                    subtitle: Text('Phone: ${driver['phone'] ?? 'N/A'} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ ${isOnline ? 'Online' : 'Offline'}'),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -923,11 +1249,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
             spacing: 16,
             runSpacing: 16,
             children: [
-              _metricCard('Total Revenue', '₹${totalRevenue.toStringAsFixed(2)}', Icons.attach_money, Colors.green, 200),
-              _metricCard('Total Delivery Fees', '₹${totalDeliveryFee.toStringAsFixed(2)}', Icons.local_shipping, Colors.blue, 200),
-              _metricCard('Total Discounts', '₹${totalDiscount.toStringAsFixed(2)}', Icons.local_offer, Colors.orange, 200),
-              _metricCard('Platform Commission', '₹${totalCommission.toStringAsFixed(2)}', Icons.account_balance, Colors.purple, 200),
-              _metricCard('Estimated Profit', '₹${totalProfit.toStringAsFixed(2)}', Icons.trending_up, Colors.teal, 200),
+              _metricCard('Total Revenue', 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${totalRevenue.toStringAsFixed(2)}', Icons.attach_money, Colors.green, 200),
+              _metricCard('Total Delivery Fees', 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${totalDeliveryFee.toStringAsFixed(2)}', Icons.local_shipping, Colors.blue, 200),
+              _metricCard('Total Discounts', 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${totalDiscount.toStringAsFixed(2)}', Icons.local_offer, Colors.orange, 200),
+              _metricCard('Platform Commission', 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${totalCommission.toStringAsFixed(2)}', Icons.account_balance, Colors.purple, 200),
+              _metricCard('Estimated Profit', 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${totalProfit.toStringAsFixed(2)}', Icons.trending_up, Colors.teal, 200),
               _metricCard('Delivered Orders', '$deliveredCount', Icons.check_circle, Colors.green, 200),
             ],
           ),
@@ -943,7 +1269,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   DataTable(
                     columns: const [
                       DataColumn(label: Text('Metric')),
-                      DataColumn(label: Text('Amount (₹)')),
+                      DataColumn(label: Text('Amount (ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹)')),
                     ],
                     rows: [
                       DataRow(cells: [DataCell(Text('Total Orders Value')), DataCell(Text(totalRevenue.toStringAsFixed(2)))]),
@@ -1252,7 +1578,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                             Text('${item['quantity']}x', style: const TextStyle(fontWeight: FontWeight.bold)),
                             const SizedBox(width: 8),
                             Expanded(child: Text(item['product_name'] ?? 'Unknown')),
-                            Text('₹${_parseDouble(item['price']).toStringAsFixed(2)}'),
+                            Text('ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${_parseDouble(item['price']).toStringAsFixed(2)}'),
                           ],
                         ),
                       );
@@ -1315,7 +1641,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: TextStyle(fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
-          Text(value is num ? '₹${value.toStringAsFixed(2)}' : value.toString(),
+          Text(value is num ? 'ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹${value.toStringAsFixed(2)}' : value.toString(),
               style: TextStyle(fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
         ],
       ),
