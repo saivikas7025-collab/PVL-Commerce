@@ -792,6 +792,44 @@ router.put("/inventory/update", async (req, res) => {
    PROFILE
 ---------------------------------------------------------- */
 
+
+/* ----------------------------------------------------------
+   POST /api/store/location/:storeId
+   Save store GPS coordinates + reverse-geocoded address.
+---------------------------------------------------------- */
+router.post("/location/:storeId", async (req, res) => {
+  const storeId = toNumber(req.params.storeId);
+  const latitude = Number(req.body?.latitude);
+  const longitude = Number(req.body?.longitude);
+  const address = req.body?.address ? String(req.body.address).slice(0, 500) : null;
+
+  if (!storeId) {
+    return res.status(400).json({ success: false, message: "Invalid storeId" });
+  }
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
+      !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    return res.status(400).json({ success: false, message: "Invalid coordinates" });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE stores
+         SET latitude = $1,
+             longitude = $2,
+             address = COALESCE($3, address),
+             updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4
+       RETURNING id, name, latitude, longitude, address`,
+      [latitude, longitude, address, storeId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Store not found" });
+    }
+    return res.json({ success: true, store: result.rows[0] });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
 router.get("/profile/:storeId", async (req, res) => {
   const storeId = getStoreId(req);
 
