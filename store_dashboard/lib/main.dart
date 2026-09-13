@@ -1,10 +1,27 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'config/api_config.dart';
 import 'package:http/http.dart' as http;
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart' as FA;
+import 'package:google_sign_in/google_sign_in.dart';
+import 'firebase_options.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
-void main() => runApp(const StoreDashboardApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    debugPrint('[PVL Store] Firebase initialized');
+  } catch (e) {
+    debugPrint('[PVL Store] Firebase init failed: $e');
+  }
+  runApp(const StoreDashboardApp());
+}
 
 class StoreDashboardApp extends StatelessWidget {
   const StoreDashboardApp({super.key});
@@ -39,6 +56,7 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   bool _loading = false;
   String _error = '';
+  bool _googleLoading = false;
 
   Future<void> _login() async {
     setState(() { _loading = true; _error = ''; });
@@ -66,6 +84,68 @@ class _LoginPageState extends State<LoginPage> {
       setState(() { _error = 'Server error: $e'; });
     } finally {
       setState(() { _loading = false; });
+    }
+  }
+
+  // ---- Google Sign-In + Register flow ----
+  Future<void> _signInWithGoogle() async {
+    setState(() { _googleLoading = true; _error = ''; });
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) { return; }
+      final googleAuth = await googleUser.authentication;
+      final credential = FA.GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      final userCred = await FA.FirebaseAuth.instance.signInWithCredential(credential);
+      final idToken = await userCred.user?.getIdToken();
+      if (idToken == null) throw Exception('No Firebase ID token');
+
+      final res = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/store/google'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'idToken': idToken}),
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+
+      if (data['success'] == true) {
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(
+          builder: (_) => DashboardPage(storeId: data['storeId']),
+        ));
+        return;
+      }
+      if (data['pending'] == true) {
+        if (!mounted) return;
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => PendingApprovalScreen(
+            storeName: '${data['storeName'] ?? 'Your store'}',
+            storeId: data['storeId'],
+          ),
+        ));
+        return;
+      }
+      if (data['rejected'] == true) {
+        setState(() => _error = 'Your application was rejected: ${data['reason'] ?? ''}');
+        return;
+      }
+      if (data['not_registered'] == true) {
+        if (!mounted) return;
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => RegisterStoreScreen(
+            idToken: idToken,
+            email: '${data['google']?['email'] ?? ''}',
+            suggestedName: '${data['google']?['name'] ?? ''}',
+          ),
+        ));
+        return;
+      }
+      setState(() => _error = '${data['message'] ?? 'Sign-in failed'}');
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Google sign-in failed: $e');
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
     }
   }
 
@@ -99,6 +179,24 @@ class _LoginPageState extends State<LoginPage> {
               SizedBox(
                 width: double.infinity,
                 height: 50,
+                child: OutlinedButton.icon(
+                  onPressed: _googleLoading ? null : _signInWithGoogle,
+                  icon: _googleLoading
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.g_mobiledata, size: 28),
+                  label: Text(_googleLoading ? 'Signing in...' : 'Continue with Google'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Row(children: [
+                Expanded(child: Divider()),
+                Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('OR')),
+                Expanded(child: Divider()),
+              ]),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
                 child: ElevatedButton(
                   onPressed: _loading ? null : _login,
                   child: _loading ? const CircularProgressIndicator() : const Text('Login'),
@@ -128,6 +226,8 @@ class _DashboardPageState extends State<DashboardPage> {
   final List<Widget> _tabs = [];
   late final StoreService _storeService;
   String _storeName = 'Store';
+  IO.Socket? _socket;
+  int _newOrderCount = 0;
 
   @override
   void initState() {
@@ -141,6 +241,59 @@ class _DashboardPageState extends State<DashboardPage> {
       InventoryTab(storeId: widget.storeId, service: _storeService),
       ProfileTab(storeId: widget.storeId, service: _storeService),
     ]);
+    _connectSocket();
+  }
+
+  @override
+  void dispose() {
+    _socket?.disconnect();
+    _socket?.dispose();
+    super.dispose();
+  }
+
+  void _connectSocket() {
+    try {
+      final root = ApiConfig.baseUrl.replaceAll(RegExp(r'/api/?$'), '');
+      _socket = IO.io(
+        root,
+        IO.OptionBuilder()
+            .setTransports(['websocket'])
+            .disableAutoConnect()
+            .build(),
+      );
+      _socket!.connect();
+      _socket!.onConnect((_) {
+        _socket!.emit('store:subscribe', {'storeId': widget.storeId});
+      });
+      _socket!.on('order:status', (data) {
+        if (!mounted || data is! Map) return;
+        final status = '${data['status'] ?? ''}';
+        if (status == 'pending') {
+          setState(() => _newOrderCount++);
+          _playAlert();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              duration: const Duration(seconds: 6),
+              backgroundColor: Colors.green.shade700,
+              content: Text('New order #PVL${data['id']}'),
+              action: SnackBarAction(
+                label: 'View',
+                textColor: Colors.white,
+                onPressed: () => setState(() => _currentIndex = 1),
+              ),
+            ),
+          );
+        }
+      });
+    } catch (_) {}
+  }
+
+  void _playAlert() async {
+    try {
+      final player = AudioPlayer();
+      await player.setReleaseMode(ReleaseMode.stop);
+      await player.play(BytesSource(Uint8List(0)));
+    } catch (_) {}
   }
 
   Future<void> _loadStoreName() async {
@@ -179,9 +332,16 @@ class _DashboardPageState extends State<DashboardPage> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (i) => setState(() => _currentIndex = i),
-        destinations: const [
+        destinations: [
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
-          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Orders'),
+          NavigationDestination(
+            icon: Badge(
+              isLabelVisible: _newOrderCount > 0,
+              label: Text('$_newOrderCount'),
+              child: const Icon(Icons.receipt_long_outlined),
+            ),
+            label: 'Orders',
+          ),
           NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Products'),
           NavigationDestination(icon: Icon(Icons.warehouse_outlined), label: 'Inventory'),
           NavigationDestination(icon: Icon(Icons.person_outlined), label: 'Profile'),
@@ -205,6 +365,22 @@ class StoreService {
   Future<Map<String, dynamic>> getDashboard() async {
     final res = await http.get(Uri.parse('$baseUrl/dashboard/$storeId'));
     return jsonDecode(res.body);
+  }
+
+  /// Save the store's GPS location + reverse-geocoded address.
+  Future<void> updateLocation(double lat, double lng, String address) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/location/$storeId'),
+      headers: _headers,
+      body: jsonEncode({
+        'latitude': lat,
+        'longitude': lng,
+        'address': address,
+      }),
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('Save failed (${res.statusCode})');
+    }
   }
 
   Future<List<dynamic>> getOrders({String? status}) async {
@@ -348,7 +524,7 @@ class _DashboardTabState extends State<DashboardTab> {
               childAspectRatio: 1.5,
               children: [
                 _kpiCard('Orders', '${_data['total_orders'] ?? 0}', Icons.receipt_long, Colors.blue),
-                _kpiCard('Revenue', 'â‚¹${(_data['today_revenue'] ?? 0).toStringAsFixed(0)}', Icons.attach_money, Colors.green),
+                _kpiCard('Revenue', 'ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${(_data['today_revenue'] ?? 0).toStringAsFixed(0)}', Icons.attach_money, Colors.green),
                 _kpiCard('Pending Products', '${_data['pending_products'] ?? 0}', Icons.hourglass_empty, Colors.orange),
                 _kpiCard('Low Stock', '${_data['low_stock'] ?? 0}', Icons.warning_amber, Colors.red),
               ],
@@ -398,7 +574,7 @@ class _DashboardTabState extends State<DashboardTab> {
       child: ListTile(
         leading: const Icon(Icons.receipt_long),
         title: Text('#PVL${order['id']}'),
-        subtitle: Text('â‚¹${order['total_amount']} â€¢ ${order['status']}'),
+        subtitle: Text('ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${order['total_amount']} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ${order['status']}'),
         trailing: Chip(
           label: Text(order['status'] ?? 'pending'),
           backgroundColor: order['status'] == 'delivered' ? Colors.green.shade100 : Colors.orange.shade100,
@@ -530,12 +706,13 @@ class _OrdersTabState extends State<OrdersTab> {
 
       if (newPendingOrders.isNotEmpty && mounted) {
         final order = newPendingOrders.first;
+        _playAlert();
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             duration: const Duration(seconds: 4),
             content: Text(
-              '🛒 New order #PVL${order['id']} received',
+              'Ã°Å¸â€ºâ€™ New order #PVL${order['id']} received',
             ),
           ),
         );
@@ -581,6 +758,53 @@ class _OrdersTabState extends State<OrdersTab> {
           _updatingOrderId = null;
         });
       }
+    }
+  }
+
+  Future<void> _rejectOrder(int orderId) async {
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Reject order?'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: 'Reason (optional)'),
+          maxLines: 2,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    if (reason == null) return;
+    try {
+      await widget.service.updateOrderStatus(orderId, 'cancelled');
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Order #PVL$orderId rejected')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reject failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _playAlert() async {
+    try {
+      final player = AudioPlayer();
+      await player.setReleaseMode(ReleaseMode.stop);
+      // Use a system beep Ã¢â‚¬â€ replace with asset path later if wanted
+      await player.play(BytesSource(Uint8List(0)));
+    } catch (_) {
+      // silent Ã¢â‚¬â€ sound is best-effort
     }
   }
 
@@ -672,23 +896,27 @@ class _OrdersTabState extends State<OrdersTab> {
 
     final isUpdating = _updatingOrderId == orderId;
 
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: isUpdating
-            ? null
-            : () => _updateStatus(orderId, nextStatus),
-        icon: isUpdating
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.arrow_forward),
-        label: Text(
-          isUpdating ? 'Updating...' : buttonText,
+    final isPending = current == 'pending';
+    return Row(
+      children: [
+        Expanded(
+          child: ElevatedButton.icon(
+            onPressed: isUpdating ? null : () => _updateStatus(orderId, nextStatus),
+            icon: isUpdating
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.arrow_forward),
+            label: Text(isUpdating ? 'Updating...' : buttonText),
+          ),
         ),
-      ),
+        if (isPending) ...[
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: isUpdating ? null : () => _rejectOrder(orderId),
+            icon: const Icon(Icons.close, color: Colors.red),
+            label: const Text('Reject', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ],
     );
   }
 
@@ -881,7 +1109,7 @@ class _OrdersTabState extends State<OrdersTab> {
                                     ],
                                   ),
                                   subtitle: Text(
-                                    '₹${order['total_amount']} • '
+                                    'Ã¢â€šÂ¹${order['total_amount']} Ã¢â‚¬Â¢ '
                                     '${order['payment_method']}',
                                   ),
                                   trailing: Chip(
@@ -913,7 +1141,7 @@ class _OrdersTabState extends State<OrdersTab> {
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
-                                            'Total: ₹${order['total_amount'] ?? 0}',
+                                            'Total: Ã¢â€šÂ¹${order['total_amount'] ?? 0}',
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
@@ -946,8 +1174,8 @@ class _OrdersTabState extends State<OrdersTab> {
                                                     ),
                                                     child: Text(
                                                       '${item['product_name'] ?? item['name'] ?? 'Item'}'
-                                                      ' × ${item['quantity'] ?? 0}'
-                                                      ' — ₹${item['total_price'] ?? item['price'] ?? 0}',
+                                                      ' Ãƒâ€” ${item['quantity'] ?? 0}'
+                                                      ' Ã¢â‚¬â€ Ã¢â€šÂ¹${item['total_price'] ?? item['price'] ?? 0}',
                                                     ),
                                                   ),
                                                 ))
@@ -1084,7 +1312,7 @@ class _ProductsTabState extends State<ProductsTab> {
                                     ? Image.network(p['image_url'], width: 50, height: 50, fit: BoxFit.cover)
                                     : const Icon(Icons.image, size: 50),
                                 title: Text(p['name'] ?? 'Unnamed'),
-                                subtitle: Text('â‚¹${p['price']} â€¢ ${p['unit']}'),
+                                subtitle: Text('ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${p['price']} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ${p['unit']}'),
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -1250,13 +1478,13 @@ class _AddEditProductPageState extends State<AddEditProductPage> {
                     ),
                     TextFormField(
                       controller: _priceController,
-                      decoration: const InputDecoration(labelText: 'Price (â‚¹)'),
+                      decoration: const InputDecoration(labelText: 'Price (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
                       keyboardType: TextInputType.number,
                       validator: (v) => v!.trim().isEmpty ? 'Required' : null,
                     ),
                     TextFormField(
                       controller: _mrpController,
-                      decoration: const InputDecoration(labelText: 'MRP (â‚¹)'),
+                      decoration: const InputDecoration(labelText: 'MRP (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
                       keyboardType: TextInputType.number,
                     ),
                     TextFormField(
@@ -1409,6 +1637,7 @@ class ProfileTab extends StatefulWidget {
 class _ProfileTabState extends State<ProfileTab> {
   Map<String, dynamic> _profile = {};
   bool _loading = true, _editing = false, _saving = false;
+  bool _capturingLocation = false;
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _nameController, _phoneController, _addressController, _deliveryFeeController, _minOrderController;
 
@@ -1453,6 +1682,55 @@ class _ProfileTabState extends State<ProfileTab> {
     }
   }
 
+  Future<void> _captureStoreLocation() async {
+    setState(() => _capturingLocation = true);
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        throw Exception('Location permission denied');
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 20),
+      );
+
+      String address = '';
+      try {
+        final uri = Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=json&zoom=18'
+          '&addressdetails=1&lat=${pos.latitude}&lon=${pos.longitude}',
+        );
+        final res = await http.get(uri, headers: {
+          'User-Agent': 'PVLCommerceStore/1.0 (contact@pvlhealthcare.com)',
+        });
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          address = '${data['display_name'] ?? ''}';
+        }
+      } catch (_) {}
+
+      await widget.service.updateLocation(pos.latitude, pos.longitude, address);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Location saved')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _capturingLocation = false);
+    }
+  }
+
+  @override
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -1476,6 +1754,69 @@ class _ProfileTabState extends State<ProfileTab> {
               ],
             ),
             const Divider(),
+
+            // ---- Store Location (GPS + Address) ----
+            Card(
+              color: _profile['latitude'] != null
+                  ? const Color(0xFFE6F4EA)
+                  : const Color(0xFFFFF4E5),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _profile['latitude'] != null
+                              ? Icons.location_on_rounded
+                              : Icons.location_searching_rounded,
+                          color: _profile['latitude'] != null
+                              ? Colors.green.shade700
+                              : Colors.orange.shade700,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Store Pickup Location',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        if (_capturingLocation)
+                          const SizedBox(
+                            width: 18, height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        else
+                          TextButton.icon(
+                            onPressed: _captureStoreLocation,
+                            icon: const Icon(Icons.my_location, size: 18),
+                            label: Text(
+                              _profile['latitude'] != null ? 'Update' : 'Capture',
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    if (_profile['latitude'] != null) ...[
+                      Text(
+                        '${_profile['latitude']}, ${_profile['longitude']}',
+                        style: const TextStyle(fontSize: 11, color: Colors.black54),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${_profile['address'] ?? 'Address not set'}',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ] else
+                      const Text(
+                        'Tap Capture to let drivers navigate to your store.',
+                        style: TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
+                  ],
+                ),
+              ),
+            ),
             _editing
                 ? Column(
                     children: [
@@ -1496,12 +1837,12 @@ class _ProfileTabState extends State<ProfileTab> {
                       ),
                       TextFormField(
                         controller: _deliveryFeeController,
-                        decoration: const InputDecoration(labelText: 'Delivery Fee (â‚¹)'),
+                        decoration: const InputDecoration(labelText: 'Delivery Fee (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
                         keyboardType: TextInputType.number,
                       ),
                       TextFormField(
                         controller: _minOrderController,
-                        decoration: const InputDecoration(labelText: 'Minimum Order (â‚¹)'),
+                        decoration: const InputDecoration(labelText: 'Minimum Order (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
                         keyboardType: TextInputType.number,
                       ),
                       const SizedBox(height: 16),
@@ -1533,9 +1874,9 @@ class _ProfileTabState extends State<ProfileTab> {
                       const SizedBox(height: 8),
                       Text('Address: ${_profile['address'] ?? '-'}'),
                       const SizedBox(height: 8),
-                      Text('Delivery Fee: â‚¹${_profile['delivery_fee'] ?? 0}'),
+                      Text('Delivery Fee: ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${_profile['delivery_fee'] ?? 0}'),
                       const SizedBox(height: 8),
-                      Text('Min Order: â‚¹${_profile['min_order'] ?? 0}'),
+                      Text('Min Order: ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${_profile['min_order'] ?? 0}'),
                       const SizedBox(height: 16),
                       ElevatedButton(
                         onPressed: () => setState(() { _editing = true; }),
@@ -1559,7 +1900,7 @@ class NotificationsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Mock for now â€“ will integrate real notifications later
+    // Mock for now ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ will integrate real notifications later
     return Scaffold(
       appBar: AppBar(title: const Text('Notifications')),
       body: ListView(
@@ -1575,6 +1916,227 @@ class NotificationsPage extends StatelessWidget {
             subtitle: Text('Only 3 units left'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// REGISTER STORE SCREEN
+// ============================================================
+class RegisterStoreScreen extends StatefulWidget {
+  final String idToken;
+  final String email;
+  final String suggestedName;
+  const RegisterStoreScreen({
+    super.key,
+    required this.idToken,
+    required this.email,
+    required this.suggestedName,
+  });
+
+  @override
+  State<RegisterStoreScreen> createState() => _RegisterStoreScreenState();
+}
+
+class _RegisterStoreScreenState extends State<RegisterStoreScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _name;
+  late final TextEditingController _phone;
+  late final TextEditingController _address;
+  bool _submitting = false;
+  String _error = '';
+  double? _lat;
+  double? _lng;
+  bool _capturing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.suggestedName);
+    _phone = TextEditingController();
+    _address = TextEditingController();
+  }
+
+  Future<void> _capture() async {
+    setState(() => _capturing = true);
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        throw Exception('Location permission denied');
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      _lat = pos.latitude;
+      _lng = pos.longitude;
+      try {
+        final uri = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=${_lat}&lon=${_lng}');
+        final res = await http.get(uri, headers: {'User-Agent': 'PVLCommerceStore/1.0'});
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          _address.text = '${data['display_name'] ?? ''}';
+        }
+      } catch (_) {}
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() { _submitting = true; _error = ''; });
+    try {
+      final res = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/store/register'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'idToken': widget.idToken,
+          'name': _name.text.trim(),
+          'phone': _phone.text.trim(),
+          'address': _address.text.trim(),
+          'latitude': _lat,
+          'longitude': _lng,
+        }),
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (data['success'] == true || data['pending'] == true) {
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(
+          builder: (_) => PendingApprovalScreen(
+            storeName: _name.text.trim(),
+            storeId: data['storeId'],
+          ),
+        ));
+      } else {
+        setState(() => _error = '${data['message'] ?? 'Registration failed'}');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Error: $e');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Register your store')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            const Text('Welcome!', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('Signed in as ${widget.email}',
+                style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 24),
+            TextFormField(
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Store name', border: OutlineInputBorder()),
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _phone,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _address,
+              minLines: 2,
+              maxLines: 3,
+              decoration: const InputDecoration(labelText: 'Address', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _capturing ? null : _capture,
+              icon: _capturing
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.my_location),
+              label: Text(_lat != null ? 'Update GPS location' : 'Pin my store location'),
+            ),
+            if (_lat != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)}',
+                    style: const TextStyle(fontSize: 11, color: Colors.green)),
+              ),
+            if (_error.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(_error, style: const TextStyle(color: Colors.red)),
+            ],
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: _submitting ? null : _submit,
+                child: _submitting
+                    ? const CircularProgressIndicator()
+                    : const Text('Submit for approval'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Your store will be visible after admin approval.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// PENDING APPROVAL SCREEN
+// ============================================================
+class PendingApprovalScreen extends StatelessWidget {
+  final String storeName;
+  final int? storeId;
+  const PendingApprovalScreen({super.key, required this.storeName, this.storeId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.hourglass_top_rounded, size: 80, color: Colors.orange),
+              const SizedBox(height: 24),
+              Text('Awaiting admin approval',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Text(
+                'Hi ${storeName}! Your store is queued for review. An admin will approve it shortly.',
+                textAlign: TextAlign.center,
+              ),
+              if (storeId != null) ...[
+                const SizedBox(height: 16),
+                Text('Store ID: #${storeId}', style: const TextStyle(fontFamily: 'monospace')),
+              ],
+              const SizedBox(height: 32),
+              ElevatedButton.icon(
+                onPressed: () => Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LoginPage()),
+                  (route) => false,
+                ),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Check again'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

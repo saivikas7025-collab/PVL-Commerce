@@ -130,6 +130,16 @@ router.get('/:orderId', authenticate, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
+        // Fetch status history for the timeline (best effort).
+    let historyRows = [];
+    try {
+      const h = await pool.query(
+        'SELECT status, note, created_at FROM order_status_history WHERE order_id = $1 ORDER BY created_at ASC',
+        [orderId]
+      );
+      historyRows = h.rows;
+    } catch (_) { historyRows = []; }
+
     const items = await pool.query(
       `SELECT id, product_id, product_name, quantity, price, total_price
        FROM order_items WHERE order_id = $1 ORDER BY id`,

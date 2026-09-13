@@ -1,4 +1,4 @@
-﻿import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
@@ -159,7 +159,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         return;
       }
 
-      if (kIsWeb || _razorpay == null) {
+      // PVL: route to our UPI screen for both web and Android (Razorpay can be re-enabled later).
+      if (true) {
         // Web / no Razorpay SDK: UPI QR + manual verification.
         final total = double.tryParse(
                 '${order['total_amount'] ?? order['total'] ?? 0}') ??
@@ -437,7 +438,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         onChanged: _razorpayEnabled
                             ? (v) => setState(() => _method = v!)
                             : null,
-                        title: const Text('Pay online (UPI / Card / Netbanking)'),
+                        title: const Text('Pay via UPI (GPay / PhonePe / Paytm / QR)'),
                         subtitle: _razorpayEnabled
                             ? const Text('Secure online payment')
                             : const Text(
@@ -497,7 +498,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       color: Colors.white, strokeWidth: 2))
               : Text(_method == _PaymentMethod.cod
                   ? 'Place order (Cash on Delivery)'
-                  : 'Pay & place order'),
+                  : 'Pay via UPI'),
         ),
       ),
     );

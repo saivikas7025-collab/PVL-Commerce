@@ -1,0 +1,132 @@
+const express = require("express");
+const router = express.Router();
+
+const { pool } = require("../db");
+
+// GET all active products
+router.get("/", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        p.id,
+        p.name,
+        p.description,
+        p.unit,
+        p.price,
+        p.original_price,
+        p.image_url,
+        p.icon,
+        p.bg_color,
+        p.is_active,
+        p.category_id,
+
+        c.name AS category_name,
+        pc.name AS main_category,
+        ps.name AS subcategory
+
+      FROM products p
+
+      LEFT JOIN categories c
+        ON c.id = p.category_id
+
+      LEFT JOIN product_subcategories ps
+        ON ps.id = p.subcategory_id
+
+      LEFT JOIN product_categories pc
+        ON pc.id = ps.category_id
+
+      WHERE p.is_active = true
+      `);
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      products: result.rows,
+    });
+  } catch (error) {
+    console.error("Get products error:", error.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch products",
+    });
+  }
+});
+
+
+// GET all product categories
+// IMPORTANT: This route must come before /:id
+router.get("/categories", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        id,
+        name
+      FROM categories
+      ORDER BY name ASC
+    `);
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      categories: result.rows,
+    });
+  } catch (error) {
+    console.error("Get categories error:", error.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch categories",
+    });
+  }
+});
+// GET single product
+router.get("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.name,
+        p.description,
+        p.unit,
+        p.price,
+        p.original_price,
+        p.image_url,
+        p.icon,
+        p.bg_color,
+        p.category_id,
+        c.name AS category_name
+      FROM products p
+      LEFT JOIN categories c
+        ON p.category_id = c.id
+      WHERE p.id = $1
+        AND p.is_active = TRUE
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      product: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Get product error:", error.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch product",
+    });
+  }
+});
+
+module.exports = router;
