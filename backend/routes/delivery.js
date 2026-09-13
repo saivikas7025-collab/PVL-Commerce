@@ -442,6 +442,36 @@ router.get("/order/:orderId", async (req, res) => {
 | ACCEPT ORDER
 |--------------------------------------------------------------------------
 */
+/* ----------------------------------------------------------
+   GET /api/delivery/available
+   Lists orders ready for pickup that no driver has accepted yet.
+---------------------------------------------------------- */
+router.get("/available", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         o.id, o.store_id, o.total_amount, o.status, o.created_at,
+         a.full_address, a.latitude, a.longitude,
+         s.name AS store_name, s.address AS store_address,
+         s.latitude AS store_lat, s.longitude AS store_lng
+       FROM orders o
+       LEFT JOIN addresses a ON a.id = o.address_id
+       LEFT JOIN stores s ON s.id = o.store_id
+       WHERE o.status = 'ready_for_pickup'
+         AND NOT EXISTS (
+           SELECT 1 FROM delivery_assignments da
+           WHERE da.order_id = o.id
+             AND da.status NOT IN ('cancelled')
+         )
+       ORDER BY o.created_at ASC
+       LIMIT 30`
+    );
+    res.json({ success: true, orders: result.rows });
+  } catch (e) {
+    console.error("Available orders error:", e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 router.post("/order/:orderId/accept", async (req, res) => {
   const client = await pool.connect();
 
@@ -584,6 +614,18 @@ router.post("/order/:orderId/accept", async (req, res) => {
     );
 
     await client.query("COMMIT");
+
+    // ---- Notify customer + store that a driver accepted ----
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`order_${orderId}`).emit('order:assigned', {
+          orderId,
+          deliveryPartnerId: partnerId,
+          acceptedAt: new Date().toISOString(),
+        });
+      }
+    } catch (_) {}
 
     return res.json({
       success: true,

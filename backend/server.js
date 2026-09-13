@@ -155,6 +155,13 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('driver:subscribe', (data) => {
+    const deliveryPartnerId = Number(data?.deliveryPartnerId || 0);
+    socket.join('drivers');
+    if (deliveryPartnerId > 0) {
+      socket.data.deliveryPartnerId = deliveryPartnerId;
+    }
+  });
   socket.on('store:subscribe', (data) => {
     const storeId = Number(data?.storeId);
 

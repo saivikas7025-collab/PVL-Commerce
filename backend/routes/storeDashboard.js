@@ -357,6 +357,34 @@ router.put("/order/:orderId/status", async (req, res) => {
       [orderId, status]
     ).catch(() => {});
 
+    // ---- Socket broadcast on status change ----
+    try {
+      const io = req.app.get('io');
+      const updatedOrder = result.rows[0];
+      if (io) {
+        io.to(`order_${orderId}`).emit('order:status', updatedOrder);
+        if (updatedOrder.store_id) {
+          io.to(`store_${updatedOrder.store_id}`).emit('order:status', updatedOrder);
+        }
+        if (status === 'ready_for_pickup') {
+          const detail = await pool.query(
+            `SELECT o.id, o.store_id, o.total_amount, o.status, o.created_at,
+                    a.full_address, a.latitude, a.longitude,
+                    s.name AS store_name, s.address AS store_address,
+                    s.latitude AS store_lat, s.longitude AS store_lng
+             FROM orders o
+             LEFT JOIN addresses a ON a.id = o.address_id
+             LEFT JOIN stores s ON s.id = o.store_id
+             WHERE o.id = $1`,
+            [orderId]
+          );
+          if (detail.rows.length > 0) {
+            io.to('drivers').emit('driver:request', detail.rows[0]);
+          }
+        }
+      }
+    } catch (_) {}
+
     return res.json({
       success: true,
       order: result.rows[0],
