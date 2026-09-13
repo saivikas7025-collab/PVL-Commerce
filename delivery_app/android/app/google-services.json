@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "955031514909",
+    "project_id": "pvl-commerce",
+    "storage_bucket": "pvl-commerce.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:955031514909:android:d83c994f154ba77a06fbf4",
+        "android_client_info": {
+          "package_name": "com.example.customer_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "955031514909-0kd7inmk0empln88l36ia6o4rjokibu9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.customer_app",
+            "certificate_hash": "e9247d1994b862116f92c0b848c2a724fd7f8d16"
+          }
+        },
+        {
+          "client_id": "955031514909-jq41c9qti9bmnrna9i2fal9n060u4mps.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCCF8BvHS1QmAzuv6ypnRZcooFgJNTwFp0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "955031514909-jq41c9qti9bmnrna9i2fal9n060u4mps.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

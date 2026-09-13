@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart' as FA;
+import 'package:google_sign_in/google_sign_in.dart';
+import 'firebase_options.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -15,7 +19,16 @@ final String apiBase = ApiConfig.baseUrl;
 final String socketBase = ApiConfig.socketUrl;
 
 // ---------- MAIN ----------
-void main() => runApp(const PVLDeliveryApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    debugPrint('[PVL Delivery] Firebase initialized');
+  } catch (e) {
+    debugPrint('[PVL Delivery] Firebase init failed: $e');
+  }
+  runApp(const PVLDeliveryApp());
+}
 
 class PVLDeliveryApp extends StatelessWidget {
   const PVLDeliveryApp({super.key});
@@ -54,6 +67,7 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
+  bool _googleLoading = false;
   String _error = '';
 
   Future<void> _login() async {
@@ -69,6 +83,20 @@ class _LoginPageState extends State<LoginPage> {
       );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        if (data['pending'] == true) {
+          if (!mounted) return;
+          Navigator.push(context, MaterialPageRoute(
+            builder: (_) => PendingApprovalScreen(
+              partnerName: '${data['name'] ?? 'Driver'}',
+              partnerId: data['partnerId'],
+            ),
+          ));
+          return;
+        }
+        if (data['rejected'] == true) {
+          setState(() => _error = 'Application rejected: ${data['reason'] ?? 'Contact support.'}');
+          return;
+        }
         if (data['success'] == true) {
           DeliveryService.partnerId = data['partnerId'];
           DeliveryService.token = (data['token'] ?? '').toString();
@@ -123,6 +151,24 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 16),
               if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: OutlinedButton.icon(
+                  onPressed: _googleLoading ? null : _signInWithGoogle,
+                  icon: _googleLoading
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.g_mobiledata, size: 28),
+                  label: Text(_googleLoading ? 'Signing in...' : 'Continue with Google'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Row(children: [
+                Expanded(child: Divider()),
+                Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('OR')),
+                Expanded(child: Divider()),
+              ]),
+              const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
                 height: 50,
@@ -267,6 +313,68 @@ class DeliveryService {
       headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
       body: jsonEncode({'online': online}),
     );
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() { _googleLoading = true; _error = ''; });
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) { return; }
+      final googleAuth = await googleUser.authentication;
+      final cred = FA.GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      final userCred = await FA.FirebaseAuth.instance.signInWithCredential(cred);
+      final idToken = await userCred.user?.getIdToken();
+      if (idToken == null) throw Exception('No Firebase ID token');
+
+      final res = await http.post(
+        Uri.parse('${apiBase}/delivery/google'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'idToken': idToken}),
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (data['success'] == true) {
+        DeliveryService.partnerId = data['partnerId'];
+        DeliveryService.token = (data['token'] ?? '').toString();
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(
+          builder: (_) => const DeliveryHomePage(),
+        ));
+        return;
+      }
+      if (data['pending'] == true) {
+        if (!mounted) return;
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => PendingApprovalScreen(
+            partnerName: '${data['name'] ?? 'Driver'}',
+            partnerId: data['partnerId'],
+          ),
+        ));
+        return;
+      }
+      if (data['rejected'] == true) {
+        setState(() => _error = 'Rejected: ${data['reason'] ?? ''}');
+        return;
+      }
+      if (data['not_registered'] == true) {
+        if (!mounted) return;
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => RegisterDriverScreen(
+            idToken: idToken,
+            email: '${data['google']?['email'] ?? ''}',
+            suggestedName: '${data['google']?['name'] ?? ''}',
+          ),
+        ));
+        return;
+      }
+      setState(() => _error = '${data['message'] ?? 'Sign-in failed'}');
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Google sign-in failed: $e');
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
+    }
   }
 }
 
@@ -511,7 +619,7 @@ class _DashboardTabState extends State<DashboardTab> {
               children: [
                 _statCard('Active Orders', '$activeOrders', Icons.inventory_2, Colors.blue),
                 _statCard('Today Earnings', '\u20B9$todayEarnings', Icons.attach_money, Colors.green),
-                _statCard('Rating', '$rating ★', Icons.star, Colors.orange),
+                _statCard('Rating', '$rating ÃƒÂ¢Ã‹Å“Ã¢â‚¬Â¦', Icons.star, Colors.orange),
               ],
             ),
             const SizedBox(height: 24),
@@ -813,7 +921,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final address = _order['full_address'] ?? _order['address'] ?? _order['store_location'] ?? '';
     final isAccepted = _isOrderAccepted(_order);
 
-    // Try to get customer name and phone – adjust field names based on debug output
+    // Try to get customer name and phone ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ adjust field names based on debug output
     final customerName = _order['customer_name'] ?? _order['name'] ?? _order['customer']?['name'] ?? _order['store_name'] ?? '';
     final customerPhone = _order['customer_phone'] ?? _order['phone'] ?? _order['customer']?['phone'] ?? _order['store_phone'] ?? '';
 
@@ -1048,7 +1156,7 @@ class _EarningsTabState extends State<EarningsTab> {
               _statCard('Total Earnings', '\u20B9${stats['total'] ?? 0}', Icons.attach_money, Colors.green),
               _statCard('Deliveries', '${stats['deliveries'] ?? 0}', Icons.local_shipping, Colors.blue),
               _statCard('Avg per Delivery', '\u20B9${stats['avg'] ?? 0}', Icons.trending_up, Colors.purple),
-              _statCard('Rating', '${stats['rating'] ?? 0} ★', Icons.star, Colors.orange),
+              _statCard('Rating', '${stats['rating'] ?? 0} ÃƒÂ¢Ã‹Å“Ã¢â‚¬Â¦', Icons.star, Colors.orange),
             ],
           ),
           const SizedBox(height: 24),
@@ -1278,6 +1386,187 @@ class _ProfileTabState extends State<ProfileTab> {
           SizedBox(width: 80, child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold))),
           Expanded(child: Text(value)),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// REGISTER DELIVERY PARTNER SCREEN
+// ============================================================
+class RegisterDriverScreen extends StatefulWidget {
+  final String idToken;
+  final String email;
+  final String suggestedName;
+  const RegisterDriverScreen({
+    super.key,
+    required this.idToken,
+    required this.email,
+    required this.suggestedName,
+  });
+
+  @override
+  State<RegisterDriverScreen> createState() => _RegisterDriverScreenState();
+}
+
+class _RegisterDriverScreenState extends State<RegisterDriverScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _name;
+  late final TextEditingController _phone;
+  late final TextEditingController _vehicleType;
+  late final TextEditingController _vehicleNumber;
+  bool _submitting = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.suggestedName);
+    _phone = TextEditingController();
+    _vehicleType = TextEditingController(text: 'Bike');
+    _vehicleNumber = TextEditingController();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() { _submitting = true; _error = ''; });
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBase/delivery/register'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'idToken': widget.idToken,
+          'name': _name.text.trim(),
+          'phone': _phone.text.trim(),
+          'vehicle_type': _vehicleType.text.trim(),
+          'vehicle_number': _vehicleNumber.text.trim(),
+          'email': widget.email,
+        }),
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (data['success'] == true || data['pending'] == true) {
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(
+          builder: (_) => PendingApprovalScreen(
+            partnerName: _name.text.trim(),
+            partnerId: data['partnerId'],
+          ),
+        ));
+      } else {
+        setState(() => _error = '${data['message'] ?? 'Registration failed'}');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Error: $e');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Become a delivery partner')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            const Text('Welcome!', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('Signed in as ${widget.email}',
+                style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 24),
+            TextFormField(
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Full name', border: OutlineInputBorder()),
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _phone,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder()),
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _vehicleType,
+              decoration: const InputDecoration(labelText: 'Vehicle type (Bike / Scooter / Car)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _vehicleNumber,
+              decoration: const InputDecoration(labelText: 'Vehicle number', border: OutlineInputBorder()),
+            ),
+            if (_error.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(_error, style: const TextStyle(color: Colors.red)),
+            ],
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: _submitting ? null : _submit,
+                child: _submitting ? const CircularProgressIndicator() : const Text('Submit for approval'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Your account will be activated after admin review.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// PENDING APPROVAL SCREEN
+// ============================================================
+class PendingApprovalScreen extends StatelessWidget {
+  final String partnerName;
+  final int? partnerId;
+  const PendingApprovalScreen({super.key, required this.partnerName, this.partnerId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.hourglass_top_rounded, size: 80, color: Colors.orange),
+              const SizedBox(height: 24),
+              const Text('Awaiting admin approval',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Text(
+                'Hi $partnerName! Your account is queued for review. You will be able to receive deliveries once approved.',
+                textAlign: TextAlign.center,
+              ),
+              if (partnerId != null) ...[
+                const SizedBox(height: 16),
+                Text('Partner ID: #$partnerId', style: const TextStyle(fontFamily: 'monospace')),
+              ],
+              const SizedBox(height: 32),
+              ElevatedButton.icon(
+                onPressed: () => Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LoginPage()),
+                  (route) => false,
+                ),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Check again'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
