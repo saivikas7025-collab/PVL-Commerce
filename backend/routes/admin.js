@@ -323,10 +323,24 @@ router.get("/orders", async (req, res) => {
   try {
     const status = String(req.query.status || '').trim();
     const storeId = Number(req.query.storeId || 0);
+    const search = String(req.query.q || '').trim();
+    const dateFrom = String(req.query.dateFrom || '').trim();
+    const dateTo = String(req.query.dateTo || '').trim();
     const params = [];
     const conditions = [];
     if (status) { params.push(status); conditions.push(`o.status = $${params.length}`); }
     if (storeId > 0) { params.push(storeId); conditions.push(`o.store_id = $${params.length}`); }
+    if (dateFrom) { params.push(dateFrom); conditions.push(`o.created_at >= $${params.length}`); }
+    if (dateTo) { params.push(dateTo); conditions.push(`o.created_at <= $${params.length}`); }
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`(
+        CAST(o.id AS TEXT) ILIKE $${params.length} OR
+        a.full_address ILIKE $${params.length} OR
+        s.name ILIKE $${params.length} OR
+        (SELECT name FROM delivery_partners WHERE id = o.driver_id LIMIT 1) ILIKE $${params.length}
+      )`);
+    }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const result = await pool.query(
@@ -459,6 +473,169 @@ router.get("/drivers", async (req, res) => {
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
+});
+
+
+/* ----------------------------------------------------------
+   ADMIN — Customers
+---------------------------------------------------------- */
+router.get("/customers", async (req, res) => {
+  try {
+    const search = String(req.query.q || '').trim();
+    const params = [];
+    let where = '';
+    if (search) {
+      params.push(`%${search}%`);
+      where = `WHERE (name ILIKE $1 OR phone ILIKE $1 OR email ILIKE $1)`;
+    }
+    const result = await pool.query(
+      `SELECT u.id, u.name, u.phone, u.email, u.role, u.is_blocked, u.created_at,
+              (SELECT COUNT(*)::int FROM orders WHERE user_id = u.id) AS total_orders,
+              (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE user_id = u.id AND status = 'delivered') AS total_spend
+       FROM users u
+       ${where}
+       ORDER BY u.created_at DESC
+       LIMIT 300`,
+      params
+    );
+    res.json({ success: true, customers: result.rows });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post("/customers/:id/block", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+  try {
+    const block = req.body?.block !== false;
+    await pool.query(`UPDATE users SET is_blocked = $1 WHERE id = $2`, [block, id]);
+    res.json({ success: true, blocked: block });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+/* ----------------------------------------------------------
+   ADMIN — Order actions
+---------------------------------------------------------- */
+router.post("/orders/:orderId/cancel", async (req, res) => {
+  const orderId = Number(req.params.orderId);
+  if (!Number.isInteger(orderId)) return res.status(400).json({ success: false, message: 'Invalid orderId' });
+  const reason = req.body?.reason ? String(req.body.reason).slice(0, 500) : 'Cancelled by admin';
+  try {
+    const result = await pool.query(
+      `UPDATE orders SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status NOT IN ('delivered', 'cancelled')
+       RETURNING id, status, store_id, user_id`,
+      [orderId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Order not found or already closed' });
+    await pool.query(
+      `INSERT INTO order_status_history (order_id, status, note, created_at)
+       VALUES ($1, 'cancelled', $2, CURRENT_TIMESTAMP)`,
+      [orderId, reason]
+    ).catch(() => {});
+    const io = req.app.get('io');
+    if (io) {
+      const o = result.rows[0];
+      io.to(`order_${orderId}`).emit('order:status', o);
+      if (o.store_id) io.to(`store_${o.store_id}`).emit('order:status', o);
+    }
+    res.json({ success: true, order: result.rows[0] });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+router.post("/orders/:orderId/reassign-driver", async (req, res) => {
+  const orderId = Number(req.params.orderId);
+  const driverId = Number(req.body?.driverId);
+  if (!Number.isInteger(orderId) || !Number.isInteger(driverId) || driverId <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid orderId or driverId' });
+  }
+  try {
+    const r = await pool.query(
+      `UPDATE orders SET driver_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2
+       RETURNING id, driver_id, store_id`,
+      [driverId, orderId]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ success: false, message: 'Order not found' });
+    const d = await pool.query(`SELECT name, phone FROM delivery_partners WHERE id = $1`, [driverId]);
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`order_${orderId}`).emit('order:assigned', {
+        orderId, deliveryPartnerId: driverId,
+        driver: d.rows[0] || null,
+        acceptedAt: new Date().toISOString(),
+      });
+    }
+    res.json({ success: true, order: r.rows[0], driver: d.rows[0] || null });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+/* ----------------------------------------------------------
+   ADMIN — Drivers
+---------------------------------------------------------- */
+router.get("/drivers/pending", async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, name, phone, is_online, approval_status, created_at
+       FROM delivery_partners WHERE approval_status = 'pending' ORDER BY created_at ASC`
+    );
+    res.json({ success: true, drivers: r.rows });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+router.post("/drivers/:id/approve", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+  try {
+    await pool.query(
+      `UPDATE delivery_partners SET approval_status = 'approved', rejection_reason = NULL WHERE id = $1`,
+      [id]
+    );
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+router.post("/drivers/:id/reject", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+  const reason = req.body?.reason ? String(req.body.reason).slice(0, 500) : 'Rejected by admin';
+  try {
+    await pool.query(
+      `UPDATE delivery_partners SET approval_status = 'rejected', rejection_reason = $2 WHERE id = $1`,
+      [id, reason]
+    );
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+/* ----------------------------------------------------------
+   ADMIN — CSV export
+---------------------------------------------------------- */
+router.get("/orders/export.csv", async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT o.id, o.status, o.total_amount, o.payment_method, o.payment_status,
+              o.created_at, s.name AS store_name,
+              (SELECT name FROM delivery_partners WHERE id = o.driver_id LIMIT 1) AS driver_name
+       FROM orders o
+       LEFT JOIN stores s ON s.id = o.store_id
+       ORDER BY o.created_at DESC LIMIT 5000`
+    );
+    const header = 'Order ID,Status,Total,Payment Method,Payment Status,Store,Driver,Created\n';
+    const rows = r.rows.map(row => [
+      `PVL${row.id}`,
+      row.status || '',
+      row.total_amount || 0,
+      row.payment_method || '',
+      row.payment_status || '',
+      `"${(row.store_name || '').replace(/"/g, '""')}"`,
+      `"${(row.driver_name || '').replace(/"/g, '""')}"`,
+      row.created_at ? new Date(row.created_at).toISOString() : '',
+    ].join(',')).join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="pvl_orders.csv"');
+    res.send(header + rows);
+  } catch (e) { res.status(500).send('Error: ' + e.message); }
 });
 
 module.exports = router;
