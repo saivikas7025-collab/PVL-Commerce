@@ -1,11 +1,24 @@
-﻿import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 import '../config/api_config.dart';
 import '../services/order_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_ui.dart';
-import 'live_tracking_screen.dart';
+
+/// Step keys + labels + icons for the timeline.
+const List<Map<String, Object>> _kSteps = [
+  {'key': 'pending',         'label': 'Order placed',        'icon': Icons.receipt_long_outlined},
+  {'key': 'accepted',        'label': 'Store accepted',       'icon': Icons.check_circle_outline},
+  {'key': 'preparing',       'label': 'Preparing your order', 'icon': Icons.soup_kitchen_outlined},
+  {'key': 'ready_for_pickup','label': 'Ready for pickup',     'icon': Icons.shopping_bag_outlined},
+  {'key': 'assigned',        'label': 'Driver assigned',      'icon': Icons.delivery_dining_outlined},
+  {'key': 'picked_up',       'label': 'Picked up from store', 'icon': Icons.inventory_2_outlined},
+  {'key': 'out_for_delivery','label': 'Out for delivery',     'icon': Icons.local_shipping_outlined},
+  {'key': 'delivered',       'label': 'Delivered',            'icon': Icons.home_filled},
+];
 
 class OrderDetailsScreen extends StatefulWidget {
   final int orderId;
@@ -17,10 +30,12 @@ class OrderDetailsScreen extends StatefulWidget {
 
 class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   Map<String, dynamic>? _order;
+  List<Map<String, dynamic>> _history = [];
   String? _error;
   IO.Socket? _socket;
-  Map<String, dynamic>? _liveLocation;
-  String? _liveStatus;
+  LatLng? _driverLatLng;
+  int? _etaMinutes;
+  double? _distanceKm;
 
   @override
   void initState() {
@@ -41,7 +56,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       if (!mounted) return;
       setState(() {
         _order = order;
-        _liveStatus = '${order['status'] ?? ''}';
+        _history = ((order['status_history'] as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
       });
     } catch (e) {
       if (!mounted) return;
@@ -54,309 +71,264 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       final root = ApiConfig.baseUrl.replaceAll(RegExp(r'/api/?$'), '');
       final socket = IO.io(
         root,
-        IO.OptionBuilder()
-            .setTransports(['websocket'])
-            .disableAutoConnect()
-            .build(),
+        IO.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build(),
       );
       socket.connect();
-      socket.onConnect((_) {
-        socket.emit('order:subscribe', {
-          'orderId': widget.orderId,
-          'role': 'customer',
-        });
-      });
+      socket.onConnect((_) => socket.emit('order:subscribe', {
+            'orderId': widget.orderId,
+            'role': 'customer',
+          }));
       socket.on('order:status', (data) {
         if (!mounted || data is! Map) return;
         setState(() {
-          _liveStatus = data['status']?.toString() ?? _liveStatus;
-          _order = {
-            ...?_order,
-            'status': data['status'] ?? _order?['status'],
-            if (data['payment_status'] != null)
-              'payment_status': data['payment_status'],
-          };
+          _order = {...?_order, 'status': data['status'] ?? _order?['status']};
         });
+        _load(); // refresh history
       });
       socket.on('location:update', (data) {
         if (!mounted || data is! Map) return;
-        setState(() => _liveLocation = Map<String, dynamic>.from(data));
+        final lat = double.tryParse('${data['latitude']}');
+        final lng = double.tryParse('${data['longitude']}');
+        if (lat == null || lng == null) return;
+        setState(() => _driverLatLng = LatLng(lat, lng));
+        _recalcEta();
       });
       _socket = socket;
     } catch (_) {}
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Order #PVL${widget.orderId}')),
-      body: _error != null
-          ? AppErrorState(message: _error!, onRetry: _load)
-          : _order == null
-              ? const Center(child: CircularProgressIndicator())
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: _buildBody(_order!),
-                ),
-    );
+  void _recalcEta() {
+    final lat = double.tryParse('${_order?['latitude']}');
+    final lng = double.tryParse('${_order?['longitude']}');
+    if (lat == null || lng == null || _driverLatLng == null) return;
+    final dLat = lat - _driverLatLng!.latitude;
+    final dLng = lng - _driverLatLng!.longitude;
+    final dx = dLng * 111.0 * 0.85;
+    final dy = dLat * 111.0;
+    final km = _sqrt(dx * dx + dy * dy);
+    _distanceKm = km;
+    _etaMinutes = (km / 25.0 * 60).round();
+    if (mounted) setState(() {});
   }
 
-  Widget _buildBody(Map<String, dynamic> order) {
-    final status =
-        (_liveStatus ?? '${order['status'] ?? 'pending'}').toLowerCase();
-    final items = List<Map<String, dynamic>>.from(
-        (order['items'] as List? ?? [])
-            .map((e) => Map<String, dynamic>.from(e as Map)));
-    final total = double.tryParse('${order['total_amount'] ?? 0}') ?? 0;
-    final subtotal = double.tryParse('${order['subtotal'] ?? 0}') ?? total;
-    final delivery = double.tryParse('${order['delivery_fee'] ?? 0}') ?? 0;
+  double _sqrt(double x) {
+    if (x <= 0) return 0;
+    double g = x / 2;
+    for (var i = 0; i < 20; i++) { g = (g + x / g) / 2; }
+    return g;
+  }
 
-    return ListView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      children: [
-        _statusCard(status),
-        const SizedBox(height: AppSpacing.lg),
-        if (!['delivered', 'cancelled'].contains(status))
-          FilledButton.icon(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => LiveTrackingScreen(
-                  orderId: widget.orderId,
-                  storeLat: double.tryParse(
-                      '${order['store_latitude'] ?? ''}'),
-                  storeLng: double.tryParse(
-                      '${order['store_longitude'] ?? ''}'),
-                  destLat: double.tryParse(
-                      '${order['latitude'] ?? order['delivery_latitude'] ?? ''}'),
-                  destLng: double.tryParse(
-                      '${order['longitude'] ?? order['delivery_longitude'] ?? ''}'),
+  String _currentStatus() => '${_order?['status'] ?? 'pending'}';
+
+  bool _stepDone(String key) {
+    final cur = _currentStatus();
+    final curIdx = _kSteps.indexWhere((s) => s['key'] == cur);
+    final stepIdx = _kSteps.indexWhere((s) => s['key'] == key);
+    if (curIdx < 0 || stepIdx < 0) return false;
+    return stepIdx <= curIdx;
+  }
+
+  String? _stepTime(String key) {
+    for (final h in _history) {
+      if ('${h['status']}' == key) return '${h['created_at'] ?? ''}';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_order == null) {
+      if (_error != null) {
+        return Scaffold(appBar: AppBar(title: const Text('Order')), body: Center(child: Text(_error!)));
+      }
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    final status = _currentStatus();
+    final showMap = ['assigned', 'picked_up', 'out_for_delivery'].contains(status) &&
+        _driverLatLng != null;
+
+    return Scaffold(
+      appBar: AppBar(title: Text('Order #PVL${widget.orderId}')),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          children: [
+            if (showMap) ...[
+              SizedBox(
+                height: 220,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                  child: FlutterMap(
+                    options: MapOptions(
+                      initialCenter: _driverLatLng!,
+                      initialZoom: 14,
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.pvlcommerce.customer',
+                      ),
+                      MarkerLayer(markers: [
+                        Marker(
+                          point: _driverLatLng!,
+                          width: 44,
+                          height: 44,
+                          child: const Icon(Icons.delivery_dining, color: Colors.blue, size: 40),
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+              if (_etaMinutes != null) ...[
+                const SizedBox(height: AppSpacing.md),
+                Card(
+                  color: const Color(0xFFE6F4EA),
+                  child: ListTile(
+                    leading: const Icon(Icons.schedule_rounded, color: AppColors.brandDark),
+                    title: Text(
+                      'Arriving in ~$_etaMinutes min',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    subtitle: Text('${_distanceKm!.toStringAsFixed(2)} km away'),
+                  ),
+                ),
+              ],
+              const SizedBox(height: AppSpacing.lg),
+            ],
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Order status',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: AppSpacing.md),
+                    for (final step in _kSteps) _timelineRow(step),
+                  ],
                 ),
               ),
             ),
-            icon: const Icon(Icons.map_outlined),
-            label: const Text('Open live tracking map'),
+            const SizedBox(height: AppSpacing.lg),
+            _summaryCard(),
+            const SizedBox(height: AppSpacing.lg),
+            _itemsCard(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _timelineRow(Map<String, Object> step) {
+    final done = _stepDone(step['key'] as String);
+    final time = _stepTime(step['key'] as String);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: done ? AppColors.brandDark : Colors.grey.shade300,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              step['icon'] as IconData,
+              size: 16,
+              color: Colors.white,
+            ),
           ),
-        const SizedBox(height: AppSpacing.lg),
-        if (_liveLocation != null) _liveLocationCard(),
-        const SizedBox(height: AppSpacing.lg),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Delivery address',
-                    style: TextStyle(fontWeight: FontWeight.w800)),
-                const SizedBox(height: AppSpacing.sm),
-                Text('${order['address_label'] ?? 'Address'}',
-                    style: const TextStyle(
-                        color: AppColors.brandDark,
-                        fontWeight: FontWeight.w700)),
-                Text('${order['full_address'] ?? ''}'),
                 Text(
-                  '${order['city'] ?? ''}, ${order['state'] ?? ''} - ${order['pincode'] ?? ''}',
-                  style: const TextStyle(color: AppColors.inkMuted),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: AppSpacing.lg),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Column(
-              children: [
-                const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Items',
-                        style: TextStyle(fontWeight: FontWeight.w800))),
-                const SizedBox(height: AppSpacing.md),
-                ...items.map((it) => Padding(
-                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                      child: Row(
-                        children: [
-                          Text('${it['quantity']} \u00D7',
-                              style: const TextStyle(
-                                  color: AppColors.brandDark,
-                                  fontWeight: FontWeight.w800)),
-                          const SizedBox(width: AppSpacing.sm),
-                          Expanded(
-                              child: Text('${it['product_name'] ?? ''}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis)),
-                          Text(
-                              '\u20B9${double.tryParse('${it['total_price'] ?? 0}')?.toStringAsFixed(0) ?? 0}'),
-                        ],
-                      ),
-                    )),
-                const Divider(height: AppSpacing.xl),
-                _row('Item total', '\u20B9${subtotal.toStringAsFixed(0)}'),
-                if (delivery > 0)
-                  _row('Delivery fee',
-                      '\u20B9${delivery.toStringAsFixed(0)}'),
-                const SizedBox(height: AppSpacing.sm),
-                _row('Total', '\u20B9${total.toStringAsFixed(0)}',
-                    strong: true),
-                const SizedBox(height: AppSpacing.md),
-                _row(
-                    'Payment',
-                    '${order['payment_method']} \u2022 ${order['payment_status']}'),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: AppSpacing.lg),
-        _timelineCard(order),
-      ],
-    );
-  }
-
-  Widget _statusCard(String status) {
-    final display = status.replaceAll('_', ' ').toUpperCase();
-    final isDelivered = status == 'delivered';
-    final isCancelled = status == 'cancelled';
-    Color color = AppColors.brandPrimary;
-    if (isDelivered) color = AppColors.success;
-    if (isCancelled) color = AppColors.error;
-    return Card(
-      color: color.withValues(alpha: 0.10),
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Row(
-          children: [
-            Icon(
-                isDelivered
-                    ? Icons.check_circle_rounded
-                    : isCancelled
-                        ? Icons.cancel_rounded
-                        : Icons.local_shipping_rounded,
-                color: color,
-                size: 34),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(display,
-                      style: TextStyle(
-                          color: color,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 14,
-                          letterSpacing: 0.6)),
-                  const SizedBox(height: 2),
-                  Text(
-                    isDelivered
-                        ? 'Delivered'
-                        : isCancelled
-                            ? 'This order was cancelled'
-                            : 'Track your order in real time',
-                    style: const TextStyle(color: AppColors.inkMuted),
+                  step['label'] as String,
+                  style: TextStyle(
+                    fontWeight: done ? FontWeight.w700 : FontWeight.w500,
+                    color: done ? AppColors.ink : AppColors.inkMuted,
                   ),
-                ],
-              ),
+                ),
+                if (time != null)
+                  Text(_fmtTime(time),
+                      style: const TextStyle(fontSize: 11, color: AppColors.inkMuted)),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _liveLocationCard() {
-    final lat = _liveLocation!['latitude'] ?? _liveLocation!['lat'];
-    final lng = _liveLocation!['longitude'] ?? _liveLocation!['lng'];
-    return Card(
-      color: AppColors.brandSoft,
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Row(
-          children: [
-            const Icon(Icons.gps_fixed_rounded,
-                color: AppColors.brandDark),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Delivery partner is en route',
-                      style: TextStyle(
-                          color: AppColors.brandDark,
-                          fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 2),
-                  Text('Last position: $lat, $lng',
-                      style: const TextStyle(
-                          color: AppColors.inkMuted, fontSize: 12)),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  String _fmtTime(String iso) {
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '';
+    }
   }
 
-  Widget _timelineCard(Map<String, dynamic> order) {
-    final history = List<Map<String, dynamic>>.from(
-        (order['status_history'] as List? ?? [])
-            .map((e) => Map<String, dynamic>.from(e as Map)));
-    if (history.isEmpty) return const SizedBox.shrink();
+  Widget _summaryCard() {
+    final o = _order!;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Status timeline',
-                style: TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: AppSpacing.md),
-            ...history.map((h) {
-              final ts = '${h['created_at'] ?? ''}';
-              final display = ts.length >= 16 ? ts.substring(0, 16) : ts;
-              return Padding(
-                padding:
-                    const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-                child: Row(
-                  children: [
-                    const Icon(Icons.check_circle_rounded,
-                        size: 18, color: AppColors.brandPrimary),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: Text(
-                          '${h['status'] ?? ''}'
-                              .replaceAll('_', ' ')
-                              .toUpperCase(),
-                          style: const TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w700)),
-                    ),
-                    Text(display,
-                        style: const TextStyle(
-                            fontSize: 11, color: AppColors.inkMuted)),
-                  ],
-                ),
-              );
-            }),
+            const Text('Delivery to', style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: AppSpacing.xs),
+            Text('${o['full_address'] ?? o['address'] ?? ''}'),
+            Text('${o['city'] ?? ''} ${o['pincode'] ?? ''}'),
+            const Divider(height: AppSpacing.xl),
+            Row(children: [
+              const Text('Total'),
+              const Spacer(),
+              Text('Rs. ${o['total_amount'] ?? o['total'] ?? 0}',
+                  style: const TextStyle(fontWeight: FontWeight.w800)),
+            ]),
+            const SizedBox(height: AppSpacing.xs),
+            Row(children: [
+              const Text('Payment'),
+              const Spacer(),
+              Text('${o['payment_method'] ?? ''} • ${o['payment_status'] ?? ''}'),
+            ]),
           ],
         ),
       ),
     );
   }
 
-  Widget _row(String label, String value, {bool strong = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-      child: Row(
-        children: [
-          Expanded(
-              child: Text(label,
-                  style: TextStyle(
-                      color: strong ? AppColors.ink : AppColors.inkMuted,
-                      fontWeight:
-                          strong ? FontWeight.w800 : FontWeight.w500))),
-          Text(value,
-              style: TextStyle(
-                  fontWeight: strong ? FontWeight.w800 : FontWeight.w600)),
-        ],
+  Widget _itemsCard() {
+    final items = (_order?['items'] as List?) ?? [];
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Items', style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: AppSpacing.sm),
+            ...items.map((e) {
+              final m = Map<String, dynamic>.from(e as Map);
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(children: [
+                  Expanded(child: Text('${m['quantity']} x ${m['product_name'] ?? m['name'] ?? 'Item'}')),
+                  Text('Rs. ${m['total_price'] ?? m['price'] ?? 0}'),
+                ]),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
