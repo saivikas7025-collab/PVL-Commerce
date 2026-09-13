@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
 class SectionHeading extends StatelessWidget {
@@ -149,14 +149,48 @@ class AppEmptyState extends StatelessWidget {
   }
 }
 
+/// Product image tile.
+///
+/// If an emoji + pastel color are provided, renders a clean icon tile
+/// (matches the category grid). Otherwise falls back to the network image,
+/// and if that fails, to a generic basket icon.
 class ProductImage extends StatelessWidget {
   final String? imageUrl;
+  final String? icon;
+  final Color? bgColor;
   final double? size;
+  final double? iconSize;
 
-  const ProductImage({super.key, this.imageUrl, this.size});
+  const ProductImage({
+    super.key,
+    this.imageUrl,
+    this.icon,
+    this.bgColor,
+    this.size,
+    this.iconSize,
+  });
 
   @override
   Widget build(BuildContext context) {
+    // Prefer emoji tile if we have one — it always renders.
+    if (icon != null && icon!.isNotEmpty) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: bgColor ?? AppColors.surfaceSecondary,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+        child: Center(
+          child: Text(
+            icon!,
+            style: TextStyle(fontSize: iconSize ?? 46),
+          ),
+        ),
+      );
+    }
+
+    // Fallback to network image
     final box = size ?? double.infinity;
     return Container(
       width: box,
@@ -180,7 +214,8 @@ class ProductImage extends StatelessWidget {
 
   Widget _placeholder() {
     return const Center(
-      child: Icon(Icons.shopping_basket_outlined, color: AppColors.brandPrimary, size: 34),
+      child: Icon(Icons.shopping_basket_outlined,
+          color: AppColors.brandPrimary, size: 34),
     );
   }
 }

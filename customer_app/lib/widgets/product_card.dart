@@ -49,7 +49,12 @@ class ProductCard extends StatelessWidget {
                 child: Stack(
                   children: [
                     Positioned.fill(
-                      child: ProductImage(imageUrl: product.imageUrl),
+                      child: ProductImage(
+                        imageUrl: product.imageUrl,
+                        icon: product.resolvedIcon,
+                        bgColor: product.resolvedBgColor,
+                        iconSize: 46,
+                      ),
                     ),
                     if (discount > 0)
                       Positioned(
