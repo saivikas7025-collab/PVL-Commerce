@@ -366,71 +366,138 @@ router.put('/order/:orderId/method', authenticate, async (req, res) => {
 });
 
 // --------------------------------------------------------
-// POST /api/payment/submit  (legacy UPI reference upload, kept for backwards compat)
+// POST /api/payment/submit
+// (legacy UPI reference upload, kept for backwards compatibility)
 // --------------------------------------------------------
 router.post('/submit', authenticate, async (req, res) => {
   try {
     const orderId = Number(req.body.orderId);
     const transactionId = String(req.body.transactionId || '').trim();
-    if (!Number.isInteger(orderId) || !transactionId || transactionId.length > 200) {
-      return res.status(400).json({ success: false, message: 'Invalid payment data' });
+
+    if (
+      !Number.isInteger(orderId) ||
+      !transactionId ||
+      transactionId.length > 200
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment data',
+      });
     }
+
     const order = await pool.query(
-      `SELECT id, user_id, total_amount FROM orders WHERE id = $1`,
+      `SELECT id, user_id, total_amount
+         FROM orders
+        WHERE id = $1`,
       [orderId]
     );
+
     if (order.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found',
+      });
     }
+
     if (order.rows[0].user_id !== req.userId) {
-      return res.status(403).json({ success: false, message: 'Not allowed' });
+      return res.status(403).json({
+        success: false,
+        message: 'Not allowed',
+      });
     }
+
     const duplicate = await pool.query(
-      `SELECT id FROM payments WHERE transaction_id = $1 LIMIT 1`,
+      `SELECT id
+         FROM payments
+        WHERE transaction_id = $1
+        LIMIT 1`,
       [transactionId]
     );
+
     if (duplicate.rows.length > 0) {
       return res.status(409).json({
         success: false,
         message: 'This transaction reference has already been submitted',
       });
     }
+
     const payment = await pool.query(
-      `INSERT INTO payments (order_id, payment_method, transaction_id, amount, status, event_type)
-       VALUES ($1, 'UPI', $2, $3, 'pending', 'upi.submitted')
-       RETURNING id, order_id, payment_method, transaction_id, amount, status, created_at`,
-      [orderId, transactionId, order.rows[0].total_amount]
+      `INSERT INTO payments (
+        order_id,
+        payment_method,
+        transaction_id,
+        amount,
+        status,
+        event_type
+      )
+      VALUES ($1, 'UPI', $2, $3, 'pending', 'upi.submitted')
+      RETURNING
+        id,
+        order_id,
+        payment_method,
+        transaction_id,
+        amount,
+        status,
+        created_at`,
+      [
+        orderId,
+        transactionId,
+        order.rows[0].total_amount,
+      ]
     );
-    res.status(201).json({
+
+    return res.status(201).json({
       success: true,
       message: 'Payment reference submitted for verification',
       payment: payment.rows[0],
     });
   } catch (error) {
     console.error('Payment submit error:', error);
-    res.status(500).json({ success: false, message: 'Failed to submit payment' });
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to submit payment',
+    });
   }
 });
 
 
 // ---------------------------------------------------------------------------
-// POST /upi/confirm
+// POST /api/payment/upi/confirm
+//
 // Customer claims they paid via UPI to 9063257025@ybl.
-// Marks order payment_status = 'awaiting_verification' so store/admin can
-// confirm the payment manually before dispatch.
+//
+// IMPORTANT:
+// This does NOT mark the payment as paid.
+// It marks the order as "awaiting_verification" so store/admin can manually
+// verify the UPI payment before dispatch.
 // ---------------------------------------------------------------------------
 router.post('/upi/confirm', authenticate, async (req, res) => {
   try {
     const { orderId, upiReference } = req.body || {};
-    if (!orderId) return res.status(400).json({ error: 'orderId is required' });
 
-    const userId = req.user.id;
+    if (!orderId) {
+      return res.status(400).json({
+        error: 'orderId is required',
+      });
+    }
+
+    // authenticate middleware provides req.userId
+    // Do NOT use req.user.id here.
+    const userId = req.userId;
+
     const check = await pool.query(
-      'SELECT id FROM orders WHERE id = $1 AND user_id = $2',
+      `SELECT id
+         FROM orders
+        WHERE id = $1
+          AND user_id = $2`,
       [orderId, userId]
     );
+
     if (check.rows.length === 0) {
-      return res.status(404).json({ error: 'Order not found' });
+      return res.status(404).json({
+        error: 'Order not found',
+      });
     }
 
     await pool.query(
@@ -438,13 +505,25 @@ router.post('/upi/confirm', authenticate, async (req, res) => {
           SET payment_status = 'awaiting_verification',
               payment_reference = $2
         WHERE id = $1`,
-      [orderId, upiReference || 'pending-manual-verification']
+      [
+        orderId,
+        upiReference || 'pending-manual-verification',
+      ]
     );
 
-    return res.json({ ok: true, orderId, payment_status: 'awaiting_verification' });
+    return res.json({
+      ok: true,
+      orderId,
+      payment_status: 'awaiting_verification',
+    });
   } catch (e) {
     console.error('UPI confirm failed:', e);
-    return res.status(500).json({ error: 'Could not record payment confirmation' });
+
+    return res.status(500).json({
+      error: 'Could not record payment confirmation',
+    });
   }
 });
+
+
 module.exports = router;
