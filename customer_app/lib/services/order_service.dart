@@ -1,4 +1,4 @@
-import '../models/order.dart';
+﻿import '../models/order.dart';
 import 'api_client.dart';
 import 'auth_service.dart';
 
@@ -20,12 +20,9 @@ class OrderService {
   }
 
   /// Create a real order from the current server-side cart.
-  ///
-  /// The backend calculates subtotal, delivery fee and total from the
-  /// authoritative product prices — the client cannot override them.
   static Future<Map<String, dynamic>> createOrder({
     required int addressId,
-    required String paymentMethod, // 'COD' | 'RAZORPAY'
+    required String paymentMethod, // 'COD' | 'RAZORPAY' | 'UPI'
     String? notes,
   }) async {
     final token = await AuthService.getToken();
@@ -39,5 +36,20 @@ class OrderService {
       token: token,
     );
     return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Customer claims they have paid via UPI to 9063257025@ybl.
+  /// Backend records this and marks the order payment as
+  /// "awaiting_verification" so the store/admin can confirm.
+  static Future<void> confirmUpiPayment({
+    required int orderId,
+    required String upiReference,
+  }) async {
+    final token = await AuthService.getToken();
+    await ApiClient.post(
+      '/payment/upi/confirm',
+      {'orderId': orderId, 'upiReference': upiReference},
+      token: token,
+    );
   }
 }

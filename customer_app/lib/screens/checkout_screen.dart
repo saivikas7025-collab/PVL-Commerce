@@ -11,6 +11,7 @@ import '../services/payment_service.dart';
 import '../theme/app_theme.dart';
 import 'address_screens.dart';
 import 'order_confirmation_screen.dart';
+import 'upi_payment_screen.dart';
 
 enum _PaymentMethod { razorpay, cod }
 
@@ -107,11 +108,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       if (kIsWeb || _razorpay == null) {
-        setState(() {
-          _error =
-              'Online payment is only available on the mobile app. Please choose Cash on Delivery for now.';
-          _placing = false;
-        });
+        // Web / no Razorpay SDK: use UPI QR + manual verification.
+        final orderTotal = double.tryParse('') ??
+            context.read<CartProvider>().subtotal;
+        setState(() => _placing = false);
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => UpiPaymentScreen(
+              orderId: orderId,
+              amount: orderTotal,
+            ),
+          ),
+        );
         return;
       }
 
