@@ -31,6 +31,7 @@ const storeRoutes = require('./routes/store');
 const storeDashboardRoutes = require('./routes/storeDashboard');
 const deliveryRoutes = require('./routes/delivery');
 const adminRoutes = require('./routes/admin');
+const { authenticate } = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -112,7 +113,14 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/store', storeDashboardRoutes);
 app.use('/api/delivery', deliveryRoutes);
-app.use('/api/admin', adminRoutes);
+// Admin routes require a valid JWT with role = 'admin'
+function requireAdmin(req, res, next) {
+  if (req.userRole !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Admin access required' });
+  }
+  next();
+}
+app.use('/api/admin', authenticate, requireAdmin, adminRoutes);
 
 // legacy /api/store... some helpers still live here
 app.use('/api/store-legacy', storeRoutes);
