@@ -19,7 +19,7 @@ const { testDatabaseConnection } = require('./db');
 const { handleWebhook: razorpayWebhook } = require('./routes/razorpayWebhook');
 
 const authRoutes = require('./routes/auth');
-const upiPaymentRoutes = require('./routes/upi_payment');
+// (UPI route now lives inside routes/payment.js)
 const homeRoutes = require('./routes/home');
 const googleAuthRoutes = require('./routes/googleAuth');
 const addressRoutes = require('./routes/addresses');
@@ -102,7 +102,7 @@ app.get('/api/health', (req, res) =>
 
 // ---- API routes --------------------------------------------
 app.use('/api/auth', authRoutes);
-app.use('/api/payment', upiPaymentRoutes);
+
 app.use('/api/home', homeRoutes);
 app.use('/api/auth', googleAuthRoutes);
 app.use('/api/addresses', addressRoutes);

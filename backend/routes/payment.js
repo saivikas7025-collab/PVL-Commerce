@@ -412,4 +412,39 @@ router.post('/submit', authenticate, async (req, res) => {
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// POST /upi/confirm
+// Customer claims they paid via UPI to 9063257025@ybl.
+// Marks order payment_status = 'awaiting_verification' so store/admin can
+// confirm the payment manually before dispatch.
+// ---------------------------------------------------------------------------
+router.post('/upi/confirm', authenticate, async (req, res) => {
+  try {
+    const { orderId, upiReference } = req.body || {};
+    if (!orderId) return res.status(400).json({ error: 'orderId is required' });
+
+    const userId = req.user.id;
+    const check = await pool.query(
+      'SELECT id FROM orders WHERE id = $1 AND user_id = $2',
+      [orderId, userId]
+    );
+    if (check.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    await pool.query(
+      `UPDATE orders
+          SET payment_status = 'awaiting_verification',
+              payment_reference = $2
+        WHERE id = $1`,
+      [orderId, upiReference || 'pending-manual-verification']
+    );
+
+    return res.json({ ok: true, orderId, payment_status: 'awaiting_verification' });
+  } catch (e) {
+    console.error('UPI confirm failed:', e);
+    return res.status(500).json({ error: 'Could not record payment confirmation' });
+  }
+});
 module.exports = router;
