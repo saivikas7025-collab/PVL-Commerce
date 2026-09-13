@@ -1209,4 +1209,115 @@ router.post("/toggle-online/:partnerId", async (req, res) => {
   }
 });
 
+
+/* ----------------------------------------------------------
+   POST /api/delivery/register
+   Register a new delivery partner (pending admin approval).
+---------------------------------------------------------- */
+router.post('/register', async (req, res) => {
+  try {
+    const { idToken, name, phone, email, vehicle_type, vehicle_number, address } = req.body || {};
+    const decoded = await verifyIdToken(idToken);
+    const gEmail = (decoded.email || '').trim().toLowerCase();
+    if (!gEmail) return res.status(400).json({ success: false, message: 'Google account has no email' });
+
+    const exists = await pool.query(
+      `SELECT id, approval_status FROM delivery_partners WHERE LOWER(COALESCE(email,'')) = $1
+       OR (user_id IN (SELECT id FROM users WHERE LOWER(email) = $1)) LIMIT 1`,
+      [gEmail]
+    );
+    if (exists.rows.length > 0) {
+      return res.status(409).json({
+        success: false, already_exists: true,
+        partnerId: exists.rows[0].id,
+        status: exists.rows[0].approval_status,
+        message: 'A delivery partner with this email already exists.',
+      });
+    }
+
+    // Create a users row (used as the profile holder)
+    const userRes = await pool.query(
+      `INSERT INTO users (name, phone, email, role, created_at)
+       VALUES ($1, $2, $3, 'delivery_partner', CURRENT_TIMESTAMP)
+       RETURNING id`,
+      [String(name || decoded.name || 'Partner').slice(0, 120), String(phone || '').slice(0, 20), gEmail]
+    );
+    const userId = userRes.rows[0].id;
+
+    const pRes = await pool.query(
+      `INSERT INTO delivery_partners
+         (user_id, vehicle_type, vehicle_number, is_online, is_available, approval_status, firebase_uid, created_at, updated_at)
+       VALUES ($1, $2, $3, FALSE, FALSE, 'pending', $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING id, approval_status`,
+      [userId, String(vehicle_type || 'Bike').slice(0, 30), String(vehicle_number || '').slice(0, 20), decoded.uid]
+    );
+
+    return res.json({
+      success: true, pending: true,
+      partnerId: pRes.rows[0].id,
+      message: 'Registration received. Awaiting admin approval.',
+    });
+  } catch (e) {
+    console.error('Driver register error:', e.message);
+    res.status(500).json({ success: false, message: e.message || 'Registration failed' });
+  }
+});
+
+/* ----------------------------------------------------------
+   POST /api/delivery/google
+   Firebase ID token -> find partner by email -> approval gate -> JWT
+---------------------------------------------------------- */
+router.post('/google', async (req, res) => {
+  try {
+    const { idToken } = req.body || {};
+    const decoded = await verifyIdToken(idToken);
+    const email = (decoded.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ success: false, message: 'No email on Google account' });
+
+    const r = await pool.query(
+      `SELECT dp.id, dp.user_id, dp.approval_status, dp.rejection_reason,
+              u.name, u.phone, u.email
+       FROM delivery_partners dp
+       LEFT JOIN users u ON u.id = dp.user_id
+       WHERE LOWER(COALESCE(u.email,'')) = $1 LIMIT 1`,
+      [email]
+    );
+    if (r.rows.length === 0) {
+      return res.status(200).json({
+        success: false, not_registered: true,
+        google: { email, name: decoded.name || '', uid: decoded.uid },
+        message: 'No delivery partner registered with this Google account.',
+      });
+    }
+
+    const partner = r.rows[0];
+    if (!partner.firebase_uid) {
+      await pool.query(`UPDATE delivery_partners SET firebase_uid = $1 WHERE id = $2`, [decoded.uid, partner.id]).catch(() => {});
+    }
+
+    const _appr = (partner.approval_status || 'approved').toLowerCase();
+    if (_appr === 'pending') {
+      return res.status(200).json({ success: false, pending: true, partnerId: partner.id, name: partner.name, message: 'Awaiting admin approval.' });
+    }
+    if (_appr === 'rejected') {
+      return res.status(200).json({ success: false, rejected: true, reason: partner.rejection_reason || 'Contact support.', message: 'Application rejected.' });
+    }
+
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign(
+      { userId: partner.user_id, partnerId: partner.id, role: 'delivery_partner' },
+      process.env.JWT_SECRET || 'pvl-dev-secret',
+      { expiresIn: '30d' }
+    );
+
+    return res.json({
+      success: true, token, partnerId: partner.id,
+      partner: { id: partner.id, name: partner.name, phone: partner.phone, email: partner.email },
+    });
+  } catch (e) {
+    console.error('Driver google auth error:', e.message);
+    res.status(401).json({ success: false, message: e.message || 'Google verification failed' });
+  }
+});
+
 module.exports = router;
