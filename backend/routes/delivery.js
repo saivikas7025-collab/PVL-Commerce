@@ -54,7 +54,9 @@ router.post("/login", async (req, res) => {
         dp.is_online,
         dp.is_available,
         dp.current_latitude,
-        dp.current_longitude
+        dp.current_longitude,
+        dp.approval_status,
+        dp.rejection_reason
 
       FROM users u
       INNER JOIN delivery_partners dp
@@ -89,6 +91,25 @@ router.post("/login", async (req, res) => {
     }
 
     delete driver.password_hash;
+
+    // ---- Approval gate ----
+    const _appr = (driver.approval_status || 'approved').toLowerCase();
+    if (_appr === 'pending') {
+      return res.status(200).json({
+        success: false,
+        pending: true,
+        partnerId: driver.delivery_partner_id,
+        message: 'Your account is awaiting admin approval.',
+      });
+    }
+    if (_appr === 'rejected') {
+      return res.status(200).json({
+        success: false,
+        rejected: true,
+        reason: driver.rejection_reason || 'Contact support.',
+        message: 'Your application was rejected.',
+      });
+    }
 
     return res.json({
       success: true,
