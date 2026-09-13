@@ -1,3 +1,4 @@
+const { verifyIdToken } = require('../services/firebaseAuth');
 const bcrypt = require('bcryptjs');
 const express = require("express");
 const router = express.Router();
