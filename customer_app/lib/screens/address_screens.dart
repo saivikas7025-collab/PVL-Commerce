@@ -1,8 +1,9 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/address.dart';
 import '../providers/address_provider.dart';
+import '../services/location_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 
@@ -26,6 +27,9 @@ class _AddressEditorScreenState extends State<AddressEditorScreen> {
   bool _isDefault = false;
   bool _saving = false;
   String? _error;
+  double? _lat;
+  double? _lng;
+  bool _capturing = false;
 
   @override
   void initState() {
@@ -36,6 +40,8 @@ class _AddressEditorScreenState extends State<AddressEditorScreen> {
     _pincode = TextEditingController(text: widget.initial?.pincode ?? '');
     _label = widget.initial?.label ?? 'Home';
     _isDefault = widget.initial?.isDefault ?? false;
+    _lat = widget.initial?.latitude;
+    _lng = widget.initial?.longitude;
   }
 
   @override
@@ -45,6 +51,27 @@ class _AddressEditorScreenState extends State<AddressEditorScreen> {
     _state.dispose();
     _pincode.dispose();
     super.dispose();
+  }
+
+  Future<void> _captureLocation() async {
+    setState(() => _capturing = true);
+    final pos = await LocationService.getCurrentPosition();
+    if (!mounted) return;
+    setState(() {
+      _capturing = false;
+      if (pos != null) {
+        _lat = pos.latitude;
+        _lng = pos.longitude;
+      }
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(pos == null
+            ? 'Could not read GPS. Please enable location access.'
+            : 'Pinned at ${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}'),
+      ),
+    );
   }
 
   Future<void> _submit() async {
@@ -63,6 +90,8 @@ class _AddressEditorScreenState extends State<AddressEditorScreen> {
         city: _city.text.trim(),
         state: _state.text.trim(),
         pincode: _pincode.text.trim(),
+        latitude: _lat,
+        longitude: _lng,
         isDefault: _isDefault,
       );
       if (widget.initial == null) {
@@ -157,6 +186,38 @@ class _AddressEditorScreenState extends State<AddressEditorScreen> {
                   : null,
             ),
             const SizedBox(height: AppSpacing.md),
+            Card(
+              color: _lat != null
+                  ? const Color(0xFFE6F4EA)
+                  : AppColors.surfaceSecondary,
+              child: ListTile(
+                leading: Icon(
+                  _lat != null
+                      ? Icons.location_on_rounded
+                      : Icons.location_searching_rounded,
+                  color: _lat != null ? AppColors.brandDark : AppColors.inkMuted,
+                ),
+                title: Text(
+                  _lat != null ? 'Location pinned' : 'Pin my current location',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  _lat != null
+                      ? '${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)}'
+                      : 'Required so we can verify your delivery point',
+                ),
+                trailing: _capturing
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : TextButton(
+                        onPressed: _captureLocation,
+                        child: Text(_lat != null ? 'Redo' : 'Pin'),
+                      ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
             SwitchListTile.adaptive(
               contentPadding: EdgeInsets.zero,
               value: _isDefault,
@@ -172,7 +233,8 @@ class _AddressEditorScreenState extends State<AddressEditorScreen> {
               onPressed: _saving ? null : _submit,
               child: _saving
                   ? const SizedBox(
-                      height: 20, width: 20,
+                      height: 20,
+                      width: 20,
                       child: CircularProgressIndicator(
                           color: Colors.white, strokeWidth: 2))
                   : const Text('Save address'),
@@ -184,9 +246,7 @@ class _AddressEditorScreenState extends State<AddressEditorScreen> {
   }
 }
 
-/// List / manage saved addresses. When [selectionMode] is true, tapping an
-/// address returns it via `Navigator.pop(address)` so the checkout can pick
-/// it up.
+/// List / manage saved addresses.
 class AddressBookScreen extends StatefulWidget {
   final bool selectionMode;
   const AddressBookScreen({super.key, this.selectionMode = false});
@@ -205,14 +265,11 @@ class _AddressBookScreenState extends State<AddressBookScreen> {
   }
 
   Future<void> _openEditor([Address? existing]) async {
-    final ok = await Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => AddressEditorScreen(initial: existing),
       ),
     );
-    if (ok == true && mounted) {
-      // AddressProvider was refreshed inside the editor.
-    }
   }
 
   @override
@@ -267,7 +324,7 @@ class _AddressBookScreenState extends State<AddressBookScreen> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete address?'),
-        content: Text('“${a.label} — ${a.fullAddress}” will be removed.'),
+        content: Text('"${a.label} - ${a.fullAddress}" will be removed.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -279,7 +336,6 @@ class _AddressBookScreenState extends State<AddressBookScreen> {
       ),
     );
     if (ok == true && mounted) {
-      // ignore: use_build_context_synchronously
       await context.read<AddressProvider>().remove(a.id);
     }
   }
@@ -364,6 +420,21 @@ class _AddressCard extends StatelessWidget {
                 '${address.city}, ${address.state} - ${address.pincode}',
                 style: const TextStyle(color: AppColors.inkMuted),
               ),
+              if (address.latitude != null && address.longitude != null) ...[
+                const SizedBox(height: AppSpacing.xs),
+                Row(
+                  children: [
+                    const Icon(Icons.location_on_rounded,
+                        size: 14, color: AppColors.brandDark),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${address.latitude!.toStringAsFixed(4)}, ${address.longitude!.toStringAsFixed(4)}',
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.brandDark),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),

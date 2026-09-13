@@ -1,11 +1,13 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+﻿import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 
 import '../models/address.dart';
 import '../providers/address_provider.dart';
 import '../providers/cart_provider.dart';
+import '../services/location_service.dart';
 import '../services/order_service.dart';
 import '../services/payment_service.dart';
 import '../theme/app_theme.dart';
@@ -23,6 +25,8 @@ class CheckoutScreen extends StatefulWidget {
 }
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
+  static const double _codMaxDistanceMeters = 200;
+
   Address? _selectedAddress;
   _PaymentMethod _method = _PaymentMethod.cod;
   bool _loadingConfig = true;
@@ -35,10 +39,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Razorpay? _razorpay;
   int? _pendingOrderId;
 
+  Position? _gpsPos;
+  bool _gpsLoading = true;
+  double? _distanceMeters;
+
+  bool get _codAllowed {
+    if (!_codEnabled) return false;
+    if (_distanceMeters == null) return true; // no GPS info — allow (server will re-verify)
+    return _distanceMeters! <= _codMaxDistanceMeters;
+  }
+
   @override
   void initState() {
     super.initState();
     _init();
+    _loadGps();
     if (!kIsWeb) {
       _razorpay = Razorpay()
         ..on(Razorpay.EVENT_PAYMENT_SUCCESS, _onPaymentSuccess)
@@ -54,6 +69,33 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     super.dispose();
   }
 
+  Future<void> _loadGps() async {
+    final pos = await LocationService.getCurrentPosition();
+    if (!mounted) return;
+    setState(() {
+      _gpsPos = pos;
+      _gpsLoading = false;
+      _recomputeDistance();
+    });
+  }
+
+  void _recomputeDistance() {
+    final addr = _selectedAddress;
+    if (addr == null ||
+        addr.latitude == null ||
+        addr.longitude == null ||
+        _gpsPos == null) {
+      _distanceMeters = null;
+      return;
+    }
+    _distanceMeters = LocationService.distanceInMeters(
+      lat1: _gpsPos!.latitude,
+      lng1: _gpsPos!.longitude,
+      lat2: addr.latitude!,
+      lng2: addr.longitude!,
+    );
+  }
+
   Future<void> _init() async {
     await context.read<AddressProvider>().refresh();
     if (!mounted) return;
@@ -65,6 +107,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       _selectedAddress = context.read<AddressProvider>().defaultAddress;
       _method = _razorpayEnabled ? _PaymentMethod.razorpay : _PaymentMethod.cod;
       _loadingConfig = false;
+      _recomputeDistance();
     });
   }
 
@@ -75,7 +118,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       ),
     );
     if (address != null && mounted) {
-      setState(() => _selectedAddress = address);
+      setState(() {
+        _selectedAddress = address;
+        _recomputeDistance();
+        if (!_codAllowed) _method = _PaymentMethod.razorpay;
+      });
     }
   }
 
@@ -90,11 +137,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     });
 
     try {
-      final paymentMethod = _method == _PaymentMethod.razorpay ? 'RAZORPAY' : 'COD';
+      final paymentMethod =
+          _method == _PaymentMethod.razorpay ? 'RAZORPAY' : 'COD';
       final response = await OrderService.createOrder(
         addressId: _selectedAddress!.id,
         paymentMethod: paymentMethod,
-        notes: _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
+        notes: _notesController.text.trim().isEmpty
+            ? null
+            : _notesController.text.trim(),
+        gpsLat: _gpsPos?.latitude,
+        gpsLng: _gpsPos?.longitude,
       );
 
       final order = Map<String, dynamic>.from(response['order'] as Map);
@@ -108,17 +160,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       if (kIsWeb || _razorpay == null) {
-        // Web / no Razorpay SDK: use UPI QR + manual verification.
-        final orderTotal = double.tryParse('') ??
+        // Web / no Razorpay SDK: UPI QR + manual verification.
+        final total = double.tryParse(
+                '${order['total_amount'] ?? order['total'] ?? 0}') ??
             context.read<CartProvider>().subtotal;
         setState(() => _placing = false);
         if (!mounted) return;
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => UpiPaymentScreen(
-              orderId: orderId,
-              amount: orderTotal,
-            ),
+            builder: (_) =>
+                UpiPaymentScreen(orderId: orderId, amount: total),
           ),
         );
         return;
@@ -139,7 +190,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       _razorpay!.open(options);
     } catch (e) {
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '').replaceFirst('ApiException: ', '');
+        _error = e
+            .toString()
+            .replaceFirst('Exception: ', '')
+            .replaceFirst('ApiException: ', '');
         _placing = false;
       });
     }
@@ -175,11 +229,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (!mounted) return;
     setState(() {
       _placing = false;
-      _error = 'Payment did not complete: ${response.message ?? "Please try again"}.';
+      _error =
+          'Payment did not complete: ${response.message ?? "Please try again"}.';
     });
-    if (orderId != null) {
-      _offerCodFallback(orderId);
-    }
+    if (orderId != null) _offerCodFallback(orderId);
     _pendingOrderId = null;
   }
 
@@ -244,6 +297,57 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  Widget _gpsBanner() {
+    if (_gpsLoading) {
+      return Card(
+        color: AppColors.surfaceSecondary,
+        child: const ListTile(
+          leading: SizedBox(
+              height: 18,
+              width: 18,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+          title: Text('Checking your location…'),
+        ),
+      );
+    }
+    if (_selectedAddress == null) return const SizedBox.shrink();
+    if (_selectedAddress!.latitude == null || _gpsPos == null) {
+      return Card(
+        color: const Color(0xFFFFF4E5),
+        child: ListTile(
+          leading: const Icon(Icons.location_searching_rounded),
+          title: const Text('Location not verified'),
+          subtitle: const Text(
+              'Enable location access on your device to unlock Cash on Delivery.'),
+          trailing: TextButton(
+            onPressed: _loadGps,
+            child: const Text('Retry'),
+          ),
+        ),
+      );
+    }
+    final d = _distanceMeters ?? 0;
+    final ok = d <= _codMaxDistanceMeters;
+    return Card(
+      color: ok ? const Color(0xFFE6F4EA) : const Color(0xFFFDE7E7),
+      child: ListTile(
+        leading: Icon(
+          ok ? Icons.verified_rounded : Icons.warning_amber_rounded,
+          color: ok ? AppColors.brandDark : AppColors.error,
+        ),
+        title: Text(
+          ok ? 'You are at your delivery location' : 'You are not at this address',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          ok
+              ? '${d.round()}m away — COD available'
+              : '${d.round()}m away — pay online (COD available only within ${_codMaxDistanceMeters.round()}m)',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cart = context.watch<CartProvider>();
@@ -251,7 +355,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         !_loadingConfig &&
         cart.items.isNotEmpty &&
         _selectedAddress != null &&
-        ((_method == _PaymentMethod.cod && _codEnabled) ||
+        ((_method == _PaymentMethod.cod && _codAllowed) ||
             (_method == _PaymentMethod.razorpay && _razorpayEnabled));
 
     return Scaffold(
@@ -261,6 +365,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           : ListView(
               padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
+                _gpsBanner(),
+                const SizedBox(height: AppSpacing.lg),
                 _section(
                   title: 'Delivery address',
                   action: TextButton(
@@ -268,10 +374,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     child: Text(_selectedAddress == null ? 'Select' : 'Change'),
                   ),
                   child: _selectedAddress == null
-                      ? const Text(
-                          'No address selected yet.',
-                          style: TextStyle(color: AppColors.inkMuted),
-                        )
+                      ? const Text('No address selected yet.',
+                          style: TextStyle(color: AppColors.inkMuted))
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -283,7 +387,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                             Text(_selectedAddress!.fullAddress),
                             Text(
                               '${_selectedAddress!.city}, ${_selectedAddress!.state} - ${_selectedAddress!.pincode}',
-                              style: const TextStyle(color: AppColors.inkMuted),
+                              style:
+                                  const TextStyle(color: AppColors.inkMuted),
                             ),
                           ],
                         ),
@@ -294,34 +399,29 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   child: Column(
                     children: [
                       ...cart.items.map((line) => Padding(
-                            padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                            padding:
+                                const EdgeInsets.only(bottom: AppSpacing.xs),
                             child: Row(
                               children: [
                                 Expanded(
                                   child: Text(
-                                      '${line.quantity} × ${line.product.name}',
+                                      '${line.quantity} x ${line.product.name}',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis),
                                 ),
-                                Text('₹${line.total.toStringAsFixed(0)}'),
+                                Text('Rs.${line.total.toStringAsFixed(0)}'),
                               ],
                             ),
                           )),
                       const Divider(height: AppSpacing.xl),
-                      _row('Item total', '₹${cart.subtotal.toStringAsFixed(0)}'),
+                      _row('Item total',
+                          'Rs.${cart.subtotal.toStringAsFixed(0)}'),
                       const SizedBox(height: AppSpacing.xs),
                       _row('Delivery fee', 'Calculated by store', muted: true),
                       const SizedBox(height: AppSpacing.md),
-                      _row(
-                        'Payable (estimated)',
-                        '₹${cart.subtotal.toStringAsFixed(0)}+',
-                        strong: true,
-                      ),
-                      const SizedBox(height: AppSpacing.xs),
-                      const Text(
-                        'Final total is calculated by the server after placing the order.',
-                        style: TextStyle(fontSize: 11, color: AppColors.inkMuted),
-                      ),
+                      _row('Payable (estimated)',
+                          'Rs.${cart.subtotal.toStringAsFixed(0)}+',
+                          strong: true),
                     ],
                   ),
                 ),
@@ -337,7 +437,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         onChanged: _razorpayEnabled
                             ? (v) => setState(() => _method = v!)
                             : null,
-                        title: const Text('UPI / Card / Netbanking (Razorpay)'),
+                        title: const Text('Pay online (UPI / Card / Netbanking)'),
                         subtitle: _razorpayEnabled
                             ? const Text('Secure online payment')
                             : const Text(
@@ -349,16 +449,18 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         contentPadding: EdgeInsets.zero,
                         value: _PaymentMethod.cod,
                         groupValue: _method,
-                        onChanged: _codEnabled
+                        onChanged: _codAllowed
                             ? (v) => setState(() => _method = v!)
                             : null,
                         title: const Text('Cash on Delivery'),
-                        subtitle: _codEnabled
-                            ? const Text('Pay when the order arrives')
-                            : const Text(
-                                'Cash on Delivery is currently disabled.',
-                                style: TextStyle(color: AppColors.error),
-                              ),
+                        subtitle: !_codEnabled
+                            ? const Text('Cash on Delivery is currently disabled.',
+                                style: TextStyle(color: AppColors.error))
+                            : !_codAllowed
+                                ? const Text(
+                                    'Not available — you are away from this address.',
+                                    style: TextStyle(color: AppColors.error))
+                                : const Text('Pay when the order arrives'),
                       ),
                     ],
                   ),
@@ -389,7 +491,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           onPressed: canPlace ? _placeOrder : null,
           child: _placing
               ? const SizedBox(
-                  height: 20, width: 20,
+                  height: 20,
+                  width: 20,
                   child: CircularProgressIndicator(
                       color: Colors.white, strokeWidth: 2))
               : Text(_method == _PaymentMethod.cod
@@ -400,7 +503,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  Widget _section({required String title, Widget? action, required Widget child}) {
+  Widget _section(
+      {required String title, Widget? action, required Widget child}) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.lg),
@@ -425,7 +529,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  Widget _row(String label, String value, {bool strong = false, bool muted = false}) {
+  Widget _row(String label, String value,
+      {bool strong = false, bool muted = false}) {
     return Row(
       children: [
         Expanded(

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Customer orders API.
  *
  * Every route requires a valid JWT. Prices, subtotal, delivery fee and
@@ -27,6 +27,19 @@ const ALLOWED_PAYMENT_METHODS = ['COD', 'RAZORPAY', 'UPI'];
 
 const DEFAULT_DELIVERY_FEE = Number(process.env.DEFAULT_DELIVERY_FEE || 2500) / 100;
 const COD_ENABLED = String(process.env.COD_ENABLED || 'true').toLowerCase() === 'true';
+const COD_MAX_DISTANCE_METERS = 200;
+
+/** Haversine distance in metres. */
+function distanceInMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 /**
  * Load the authenticated user's cart with authoritative product prices.

@@ -1,4 +1,4 @@
-﻿import '../models/order.dart';
+import '../models/order.dart';
 import 'api_client.dart';
 import 'auth_service.dart';
 
@@ -24,6 +24,8 @@ class OrderService {
     required int addressId,
     required String paymentMethod, // 'COD' | 'RAZORPAY' | 'UPI'
     String? notes,
+    double? gpsLat,
+    double? gpsLng,
   }) async {
     final token = await AuthService.getToken();
     final data = await ApiClient.post(
@@ -32,6 +34,8 @@ class OrderService {
         'addressId': addressId,
         'paymentMethod': paymentMethod,
         if (notes != null && notes.isNotEmpty) 'notes': notes,
+        if (gpsLat != null) 'gpsLat': gpsLat,
+        if (gpsLng != null) 'gpsLng': gpsLng,
       },
       token: token,
     );
