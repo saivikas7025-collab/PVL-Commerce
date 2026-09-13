@@ -464,9 +464,13 @@ router.patch("/orders/:orderId/status", async (req, res) => {
 router.get("/drivers", async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, phone, is_online, is_available, created_at
-       FROM delivery_partners
-       ORDER BY is_online DESC, name ASC
+      `SELECT dp.id, dp.user_id, dp.vehicle_type, dp.vehicle_number,
+              dp.is_online, dp.is_available, dp.approval_status,
+              dp.current_latitude, dp.current_longitude, dp.created_at,
+              u.name, u.phone, u.email
+       FROM delivery_partners dp
+       LEFT JOIN users u ON u.id = dp.user_id
+       ORDER BY dp.is_online DESC, u.name ASC NULLS LAST
        LIMIT 500`
     );
     res.json({ success: true, drivers: result.rows });
@@ -576,8 +580,13 @@ router.post("/orders/:orderId/reassign-driver", async (req, res) => {
 router.get("/drivers/pending", async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, name, phone, is_online, approval_status, created_at
-       FROM delivery_partners WHERE approval_status = 'pending' ORDER BY created_at ASC`
+      `SELECT dp.id, dp.user_id, dp.vehicle_type, dp.vehicle_number,
+              dp.is_online, dp.approval_status, dp.created_at,
+              u.name, u.phone, u.email
+       FROM delivery_partners dp
+       LEFT JOIN users u ON u.id = dp.user_id
+       WHERE dp.approval_status = 'pending'
+       ORDER BY dp.created_at ASC`
     );
     res.json({ success: true, drivers: r.rows });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
@@ -611,7 +620,7 @@ router.post("/drivers/:id/reject", async (req, res) => {
 /* ----------------------------------------------------------
    ADMIN — CSV export
 ---------------------------------------------------------- */
-router.get("/orders/export.csv", async (req, res) => {
+router.get("/export/orders.csv", async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT o.id, o.status, o.total_amount, o.payment_method, o.payment_status,
