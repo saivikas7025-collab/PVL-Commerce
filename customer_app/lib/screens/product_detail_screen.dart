@@ -65,7 +65,7 @@ class ProductDetailScreen extends StatelessWidget {
                     SizedBox(
                       width: double.infinity,
                       height: imageHeight,
-                      child: ProductImage(imageUrl: product.imageUrl),
+                      child: ProductImage(imageUrl: product.imageUrl, icon: product.resolvedIcon, bgColor: product.resolvedBgColor, iconSize: 96),
                     ),
                     const SizedBox(height: AppSpacing.xl),
                     Row(

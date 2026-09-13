@@ -143,7 +143,7 @@ class _CartItemTile extends StatelessWidget {
         padding: const EdgeInsets.all(AppSpacing.md),
         child: Row(
           children: [
-            ProductImage(imageUrl: item.product.imageUrl, size: 76),
+            ProductImage(imageUrl: item.product.imageUrl, icon: item.product.resolvedIcon, bgColor: item.product.resolvedBgColor, size: 76, iconSize: 34),
             const SizedBox(width: AppSpacing.md),
             Expanded(
               child: Column(
