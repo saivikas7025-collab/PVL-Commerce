@@ -355,6 +355,8 @@ router.get("/orders", async (req, res) => {
               s.latitude AS store_lat, s.longitude AS store_lng, s.address AS store_address,
               a.full_address AS address, a.city, a.state, a.pincode,
               a.latitude AS customer_lat, a.longitude AS customer_lng,
+                u.name  AS customer_name,
+                u.phone AS customer_phone,
               COALESCE((
                 SELECT json_agg(json_build_object(
                   'id', oi.id, 'product_name', oi.product_name,
@@ -365,6 +367,7 @@ router.get("/orders", async (req, res) => {
        FROM orders o
        LEFT JOIN stores s ON s.id = o.store_id
        LEFT JOIN addresses a ON a.id = o.address_id
+         LEFT JOIN users u ON u.id = o.user_id
        ${where}
        ORDER BY o.created_at DESC
        LIMIT 200`,
@@ -389,6 +392,8 @@ router.get("/orders/:orderId", async (req, res) => {
               s.latitude AS store_lat, s.longitude AS store_lng,
               a.full_address, a.city, a.state, a.pincode,
               a.latitude AS customer_lat, a.longitude AS customer_lng,
+                u.name  AS customer_name,
+                u.phone AS customer_phone,
               (SELECT name  FROM delivery_partners WHERE id = o.driver_id LIMIT 1) AS driver_name,
               (SELECT phone FROM delivery_partners WHERE id = o.driver_id LIMIT 1) AS driver_phone
        FROM orders o
