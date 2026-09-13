@@ -189,6 +189,67 @@ class _LoginPageState extends State<LoginPage> {
       ),
     );
   }
+  Future<void> _signInWithGoogle() async {
+    setState(() { _googleLoading = true; _error = ''; });
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) { return; }
+      final googleAuth = await googleUser.authentication;
+      final cred = FA.GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      final userCred = await FA.FirebaseAuth.instance.signInWithCredential(cred);
+      final idToken = await userCred.user?.getIdToken();
+      if (idToken == null) throw Exception('No Firebase ID token');
+
+      final res = await http.post(
+        Uri.parse('${apiBase}/delivery/google'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'idToken': idToken}),
+      );
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      if (data['success'] == true) {
+        DeliveryService.partnerId = data['partnerId'];
+        DeliveryService.token = (data['token'] ?? '').toString();
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(
+          builder: (_) => const DeliveryHomePage(),
+        ));
+        return;
+      }
+      if (data['pending'] == true) {
+        if (!mounted) return;
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => PendingApprovalScreen(
+            partnerName: '${data['name'] ?? 'Driver'}',
+            partnerId: data['partnerId'],
+          ),
+        ));
+        return;
+      }
+      if (data['rejected'] == true) {
+        setState(() => _error = 'Rejected: ${data['reason'] ?? ''}');
+        return;
+      }
+      if (data['not_registered'] == true) {
+        if (!mounted) return;
+        Navigator.push(context, MaterialPageRoute(
+          builder: (_) => RegisterDriverScreen(
+            idToken: idToken,
+            email: '${data['google']?['email'] ?? ''}',
+            suggestedName: '${data['google']?['name'] ?? ''}',
+          ),
+        ));
+        return;
+      }
+      setState(() => _error = '${data['message'] ?? 'Sign-in failed'}');
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Google sign-in failed: $e');
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
+    }
+  }
 }
 
 // ============================================================
@@ -315,67 +376,6 @@ class DeliveryService {
     );
   }
 
-  Future<void> _signInWithGoogle() async {
-    setState(() { _googleLoading = true; _error = ''; });
-    try {
-      final googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) { return; }
-      final googleAuth = await googleUser.authentication;
-      final cred = FA.GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-      final userCred = await FA.FirebaseAuth.instance.signInWithCredential(cred);
-      final idToken = await userCred.user?.getIdToken();
-      if (idToken == null) throw Exception('No Firebase ID token');
-
-      final res = await http.post(
-        Uri.parse('${apiBase}/delivery/google'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'idToken': idToken}),
-      );
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      if (data['success'] == true) {
-        DeliveryService.partnerId = data['partnerId'];
-        DeliveryService.token = (data['token'] ?? '').toString();
-        if (!mounted) return;
-        Navigator.pushReplacement(context, MaterialPageRoute(
-          builder: (_) => const DeliveryHomePage(),
-        ));
-        return;
-      }
-      if (data['pending'] == true) {
-        if (!mounted) return;
-        Navigator.push(context, MaterialPageRoute(
-          builder: (_) => PendingApprovalScreen(
-            partnerName: '${data['name'] ?? 'Driver'}',
-            partnerId: data['partnerId'],
-          ),
-        ));
-        return;
-      }
-      if (data['rejected'] == true) {
-        setState(() => _error = 'Rejected: ${data['reason'] ?? ''}');
-        return;
-      }
-      if (data['not_registered'] == true) {
-        if (!mounted) return;
-        Navigator.push(context, MaterialPageRoute(
-          builder: (_) => RegisterDriverScreen(
-            idToken: idToken,
-            email: '${data['google']?['email'] ?? ''}',
-            suggestedName: '${data['google']?['name'] ?? ''}',
-          ),
-        ));
-        return;
-      }
-      setState(() => _error = '${data['message'] ?? 'Sign-in failed'}');
-    } catch (e) {
-      if (mounted) setState(() => _error = 'Google sign-in failed: $e');
-    } finally {
-      if (mounted) setState(() => _googleLoading = false);
-    }
-  }
 }
 
 // ============================================================
@@ -619,7 +619,7 @@ class _DashboardTabState extends State<DashboardTab> {
               children: [
                 _statCard('Active Orders', '$activeOrders', Icons.inventory_2, Colors.blue),
                 _statCard('Today Earnings', '\u20B9$todayEarnings', Icons.attach_money, Colors.green),
-                _statCard('Rating', '$rating ÃƒÂ¢Ã‹Å“Ã¢â‚¬Â¦', Icons.star, Colors.orange),
+                _statCard('Rating', '$rating ÃƒÆ’Ã‚Â¢Ãƒâ€¹Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦', Icons.star, Colors.orange),
               ],
             ),
             const SizedBox(height: 24),
@@ -921,7 +921,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final address = _order['full_address'] ?? _order['address'] ?? _order['store_location'] ?? '';
     final isAccepted = _isOrderAccepted(_order);
 
-    // Try to get customer name and phone ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ adjust field names based on debug output
+    // Try to get customer name and phone ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ adjust field names based on debug output
     final customerName = _order['customer_name'] ?? _order['name'] ?? _order['customer']?['name'] ?? _order['store_name'] ?? '';
     final customerPhone = _order['customer_phone'] ?? _order['phone'] ?? _order['customer']?['phone'] ?? _order['store_phone'] ?? '';
 
@@ -1156,7 +1156,7 @@ class _EarningsTabState extends State<EarningsTab> {
               _statCard('Total Earnings', '\u20B9${stats['total'] ?? 0}', Icons.attach_money, Colors.green),
               _statCard('Deliveries', '${stats['deliveries'] ?? 0}', Icons.local_shipping, Colors.blue),
               _statCard('Avg per Delivery', '\u20B9${stats['avg'] ?? 0}', Icons.trending_up, Colors.purple),
-              _statCard('Rating', '${stats['rating'] ?? 0} ÃƒÂ¢Ã‹Å“Ã¢â‚¬Â¦', Icons.star, Colors.orange),
+              _statCard('Rating', '${stats['rating'] ?? 0} ÃƒÆ’Ã‚Â¢Ãƒâ€¹Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦', Icons.star, Colors.orange),
             ],
           ),
           const SizedBox(height: 24),
