@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -744,6 +745,20 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         (order['assignment_status'] == 'accepted' || order['assignment_status'] == 'assigned' || order['assignment_status'] == true);
   }
 
+  Future<void> _openMaps(double lat, double lng, String label) async {
+    final url = 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving';
+    final uri = Uri.parse(url);
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open Maps for $label')),
+        );
+      }
+    }
+  }
+
   Future<void> _accept() async {
     try {
       debugPrint('ACCEPTING ORDER ${widget.orderId} with partner ${DeliveryService.partnerId}');
@@ -869,14 +884,42 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                     ],
                   )
                 else if (isAccepted)
-                  ElevatedButton(
-                    onPressed: _startDelivery,
-                    child: const Text('Start Delivery'),
+                  Row(
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          final lat = double.tryParse('${_order['store_latitude'] ?? 17.3850}') ?? 17.3850;
+                          final lng = double.tryParse('${_order['store_longitude'] ?? 78.4867}') ?? 78.4867;
+                          _openMaps(lat, lng, 'Store');
+                        },
+                        icon: const Icon(Icons.navigation_rounded),
+                        label: const Text('To Store'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: _startDelivery,
+                        child: const Text('Start Delivery'),
+                      ),
+                    ],
                   )
                 else if (status == 'out_for_delivery')
-                  ElevatedButton(
-                    onPressed: _complete,
-                    child: const Text('Complete Delivery'),
+                  Row(
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          final lat = double.tryParse('${_order['latitude'] ?? 17.3850}') ?? 17.3850;
+                          final lng = double.tryParse('${_order['longitude'] ?? 78.4867}') ?? 78.4867;
+                          _openMaps(lat, lng, 'Customer');
+                        },
+                        icon: const Icon(Icons.navigation_rounded),
+                        label: const Text('To Customer'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: _complete,
+                        child: const Text('Complete'),
+                      ),
+                    ],
                   ),
               ],
             ),
