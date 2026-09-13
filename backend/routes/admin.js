@@ -334,8 +334,13 @@ router.get("/orders", async (req, res) => {
               o.discount, o.total_amount, o.payment_method, o.payment_status,
               o.notes, o.created_at, o.updated_at,
               o.gps_distance_meters, o.cod_allowed,
+              o.driver_id,
+              (SELECT name  FROM delivery_partners WHERE id = o.driver_id LIMIT 1) AS driver_name,
+              (SELECT phone FROM delivery_partners WHERE id = o.driver_id LIMIT 1) AS driver_phone,
               s.name AS store_name,
+              s.latitude AS store_lat, s.longitude AS store_lng, s.address AS store_address,
               a.full_address AS address, a.city, a.state, a.pincode,
+              a.latitude AS customer_lat, a.longitude AS customer_lng,
               COALESCE((
                 SELECT json_agg(json_build_object(
                   'id', oi.id, 'product_name', oi.product_name,
@@ -365,8 +370,13 @@ router.get("/orders/:orderId", async (req, res) => {
   }
   try {
     const order = await pool.query(
-      `SELECT o.*, s.name AS store_name, s.address AS store_address,
-              a.full_address, a.city, a.state, a.pincode, a.latitude, a.longitude
+      `SELECT o.*,
+              s.name AS store_name, s.address AS store_address,
+              s.latitude AS store_lat, s.longitude AS store_lng,
+              a.full_address, a.city, a.state, a.pincode,
+              a.latitude AS customer_lat, a.longitude AS customer_lng,
+              (SELECT name  FROM delivery_partners WHERE id = o.driver_id LIMIT 1) AS driver_name,
+              (SELECT phone FROM delivery_partners WHERE id = o.driver_id LIMIT 1) AS driver_phone
        FROM orders o
        LEFT JOIN stores s ON s.id = o.store_id
        LEFT JOIN addresses a ON a.id = o.address_id
@@ -428,6 +438,24 @@ router.patch("/orders/:orderId/status", async (req, res) => {
     }
 
     res.json({ success: true, order: result.rows[0] });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+
+/* ----------------------------------------------------------
+   ADMIN — Delivery partners
+---------------------------------------------------------- */
+router.get("/drivers", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, phone, is_online, is_available, created_at
+       FROM delivery_partners
+       ORDER BY is_online DESC, name ASC
+       LIMIT 500`
+    );
+    res.json({ success: true, drivers: result.rows });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
