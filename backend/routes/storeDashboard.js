@@ -1041,4 +1041,166 @@ router.get("/revenue/:storeId", async (req, res) => {
   }
 });
 
+
+/* ----------------------------------------------------------
+   POST /api/store/google
+   Firebase ID token → find or refuse store by email.
+---------------------------------------------------------- */
+const { verifyIdToken } = require('../services/firebaseAuth');
+
+router.post("/google", async (req, res) => {
+  try {
+    const { idToken } = req.body || {};
+    const decoded = await verifyIdToken(idToken);
+    const email = (decoded.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Google account has no email" });
+    }
+
+    const result = await pool.query(
+      `SELECT id, name, email, phone, address, latitude, longitude,
+              approval_status, rejection_reason, is_active
+       FROM stores WHERE LOWER(email) = $1 LIMIT 1`,
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      // Not registered — tell the app to show the register screen.
+      return res.status(200).json({
+        success: false,
+        not_registered: true,
+        google: {
+          email,
+          name: decoded.name || '',
+          picture: decoded.picture || '',
+          uid: decoded.uid,
+        },
+        message: 'No store registered with this Google account.',
+      });
+    }
+
+    const store = result.rows[0];
+
+    // Bind firebase_uid on first Google login
+    if (!store.firebase_uid) {
+      await pool.query(
+        `UPDATE stores SET firebase_uid = $1 WHERE id = $2`,
+        [decoded.uid, store.id]
+      ).catch(() => {});
+    }
+
+    const status = (store.approval_status || 'approved').toLowerCase();
+    if (status === 'pending') {
+      return res.status(200).json({
+        success: false,
+        pending: true,
+        storeId: store.id,
+        storeName: store.name,
+        message: 'Your store is awaiting admin approval.',
+      });
+    }
+    if (status === 'rejected') {
+      return res.status(200).json({
+        success: false,
+        rejected: true,
+        reason: store.rejection_reason || 'Contact support.',
+        message: 'Your store application was rejected.',
+      });
+    }
+
+    // Approved → issue our token
+    const jwt = require('jsonwebtoken');
+    // --- Approval gate ---
+    const status = (store.approval_status || 'approved').toLowerCase();
+    if (status === 'pending') {
+      return res.status(200).json({ success: false, pending: true, message: 'Store awaiting admin approval.' });
+    }
+    if (status === 'rejected') {
+      return res.status(200).json({ success: false, rejected: true, message: store.rejection_reason || 'Store application rejected.' });
+    }
+    const token = jwt.sign(
+      { storeId: store.id, email: store.email, role: 'store' },
+      process.env.JWT_SECRET || 'pvl-dev-secret',
+      { expiresIn: '30d' }
+    );
+
+    return res.json({
+      success: true,
+      token,
+      storeId: store.id,
+      store: {
+        id: store.id,
+        name: store.name,
+        email: store.email,
+        phone: store.phone,
+        address: store.address,
+        latitude: store.latitude,
+        longitude: store.longitude,
+      },
+    });
+  } catch (e) {
+    console.error('Store google auth error:', e.message);
+    return res.status(401).json({ success: false, message: e.message || 'Google verification failed' });
+  }
+});
+
+/* ----------------------------------------------------------
+   POST /api/store/register
+   Creates a store with approval_status = 'pending'.
+---------------------------------------------------------- */
+router.post("/register", async (req, res) => {
+  try {
+    const { idToken, name, phone, address, latitude, longitude } = req.body || {};
+    const decoded = await verifyIdToken(idToken);
+    const email = (decoded.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Google account has no email" });
+    }
+
+    // Already registered?
+    const exists = await pool.query(
+      `SELECT id, approval_status FROM stores WHERE LOWER(email) = $1 LIMIT 1`,
+      [email]
+    );
+    if (exists.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        already_exists: true,
+        storeId: exists.rows[0].id,
+        status: exists.rows[0].approval_status,
+        message: 'A store with this email already exists.',
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO stores
+         (name, email, phone, address, latitude, longitude,
+          is_active, is_online, approval_status, firebase_uid, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6,
+               TRUE, FALSE, 'pending', $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING id, name, email, approval_status`,
+      [
+        String(name || decoded.name || 'New Store').slice(0, 200),
+        email,
+        String(phone || '').slice(0, 20),
+        address ? String(address).slice(0, 500) : null,
+        Number.isFinite(Number(latitude)) ? Number(latitude) : null,
+        Number.isFinite(Number(longitude)) ? Number(longitude) : null,
+        decoded.uid,
+      ]
+    );
+
+    return res.json({
+      success: true,
+      pending: true,
+      storeId: result.rows[0].id,
+      store: result.rows[0],
+      message: 'Store created. Awaiting admin approval.',
+    });
+  } catch (e) {
+    console.error('Store register error:', e.message);
+    return res.status(500).json({ success: false, message: e.message || 'Registration failed' });
+  }
+});
+
 module.exports = router;
