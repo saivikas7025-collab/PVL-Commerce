@@ -399,6 +399,7 @@ router.get("/orders/:orderId", async (req, res) => {
        FROM orders o
        LEFT JOIN stores s ON s.id = o.store_id
        LEFT JOIN addresses a ON a.id = o.address_id
+       LEFT JOIN users u ON u.id = o.user_id
        WHERE o.id = $1`,
       [orderId]
     );
