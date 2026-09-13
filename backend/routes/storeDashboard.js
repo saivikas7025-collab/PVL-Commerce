@@ -1111,11 +1111,11 @@ router.post("/google", async (req, res) => {
     // Approved → issue our token
     const jwt = require('jsonwebtoken');
     // --- Approval gate ---
-    const status = (store.approval_status || 'approved').toLowerCase();
-    if (status === 'pending') {
+    const _approvalStatus = (store.approval_status || 'approved').toLowerCase();
+    if (_approvalStatus === 'pending') {
       return res.status(200).json({ success: false, pending: true, message: 'Store awaiting admin approval.' });
     }
-    if (status === 'rejected') {
+    if (_approvalStatus === 'rejected') {
       return res.status(200).json({ success: false, rejected: true, message: store.rejection_reason || 'Store application rejected.' });
     }
     const token = jwt.sign(
