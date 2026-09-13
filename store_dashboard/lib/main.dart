@@ -524,7 +524,7 @@ class _DashboardTabState extends State<DashboardTab> {
               childAspectRatio: 1.5,
               children: [
                 _kpiCard('Orders', '${_data['total_orders'] ?? 0}', Icons.receipt_long, Colors.blue),
-                _kpiCard('Revenue', 'ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${(_data['today_revenue'] ?? 0).toStringAsFixed(0)}', Icons.attach_money, Colors.green),
+                _kpiCard('Revenue', 'Rs.${(_data['today_revenue'] ?? 0).toStringAsFixed(0)}', Icons.attach_money, Colors.green),
                 _kpiCard('Pending Products', '${_data['pending_products'] ?? 0}', Icons.hourglass_empty, Colors.orange),
                 _kpiCard('Low Stock', '${_data['low_stock'] ?? 0}', Icons.warning_amber, Colors.red),
               ],
@@ -574,7 +574,7 @@ class _DashboardTabState extends State<DashboardTab> {
       child: ListTile(
         leading: const Icon(Icons.receipt_long),
         title: Text('#PVL${order['id']}'),
-        subtitle: Text('ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${order['total_amount']} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ${order['status']}'),
+        subtitle: Text('Rs.${order['total_amount']} Rs.${order['status']}'),
         trailing: Chip(
           label: Text(order['status'] ?? 'pending'),
           backgroundColor: order['status'] == 'delivered' ? Colors.green.shade100 : Colors.orange.shade100,
@@ -712,7 +712,7 @@ class _OrdersTabState extends State<OrdersTab> {
           SnackBar(
             duration: const Duration(seconds: 4),
             content: Text(
-              'Ã°Å¸â€ºâ€™ New order #PVL${order['id']} received',
+              'Rs.${order['id']} received',
             ),
           ),
         );
@@ -801,10 +801,10 @@ class _OrdersTabState extends State<OrdersTab> {
     try {
       final player = AudioPlayer();
       await player.setReleaseMode(ReleaseMode.stop);
-      // Use a system beep Ã¢â‚¬â€ replace with asset path later if wanted
+      // Use a system beep  replace with asset path later if wanted
       await player.play(BytesSource(Uint8List(0)));
     } catch (_) {
-      // silent Ã¢â‚¬â€ sound is best-effort
+      // silent  sound is best-effort
     }
   }
 
@@ -1109,7 +1109,7 @@ class _OrdersTabState extends State<OrdersTab> {
                                     ],
                                   ),
                                   subtitle: Text(
-                                    'Ã¢â€šÂ¹${order['total_amount']} Ã¢â‚¬Â¢ '
+                                    'Rs.${order['total_amount']}  '
                                     '${order['payment_method']}',
                                   ),
                                   trailing: Chip(
@@ -1141,7 +1141,7 @@ class _OrdersTabState extends State<OrdersTab> {
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
-                                            'Total: Ã¢â€šÂ¹${order['total_amount'] ?? 0}',
+                                            'Total: Rs.${order['total_amount'] ?? 0}',
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
@@ -1174,8 +1174,8 @@ class _OrdersTabState extends State<OrdersTab> {
                                                     ),
                                                     child: Text(
                                                       '${item['product_name'] ?? item['name'] ?? 'Item'}'
-                                                      ' Ãƒâ€” ${item['quantity'] ?? 0}'
-                                                      ' Ã¢â‚¬â€ Ã¢â€šÂ¹${item['total_price'] ?? item['price'] ?? 0}',
+                                                      ' Rs.${item['quantity'] ?? 0}'
+                                                      ' Rs.${item['total_price'] ?? item['price'] ?? 0}',
                                                     ),
                                                   ),
                                                 ))
@@ -1312,7 +1312,7 @@ class _ProductsTabState extends State<ProductsTab> {
                                     ? Image.network(p['image_url'], width: 50, height: 50, fit: BoxFit.cover)
                                     : const Icon(Icons.image, size: 50),
                                 title: Text(p['name'] ?? 'Unnamed'),
-                                subtitle: Text('ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${p['price']} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ${p['unit']}'),
+                                subtitle: Text('Rs.${p['price']} Rs.${p['unit']}'),
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -1478,13 +1478,13 @@ class _AddEditProductPageState extends State<AddEditProductPage> {
                     ),
                     TextFormField(
                       controller: _priceController,
-                      decoration: const InputDecoration(labelText: 'Price (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
+                      decoration: const InputDecoration(labelText: 'Price ()'),
                       keyboardType: TextInputType.number,
                       validator: (v) => v!.trim().isEmpty ? 'Required' : null,
                     ),
                     TextFormField(
                       controller: _mrpController,
-                      decoration: const InputDecoration(labelText: 'MRP (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
+                      decoration: const InputDecoration(labelText: 'MRP ()'),
                       keyboardType: TextInputType.number,
                     ),
                     TextFormField(
@@ -1837,12 +1837,12 @@ class _ProfileTabState extends State<ProfileTab> {
                       ),
                       TextFormField(
                         controller: _deliveryFeeController,
-                        decoration: const InputDecoration(labelText: 'Delivery Fee (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
+                        decoration: const InputDecoration(labelText: 'Delivery Fee ()'),
                         keyboardType: TextInputType.number,
                       ),
                       TextFormField(
                         controller: _minOrderController,
-                        decoration: const InputDecoration(labelText: 'Minimum Order (ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹)'),
+                        decoration: const InputDecoration(labelText: 'Minimum Order ()'),
                         keyboardType: TextInputType.number,
                       ),
                       const SizedBox(height: 16),
@@ -1874,9 +1874,9 @@ class _ProfileTabState extends State<ProfileTab> {
                       const SizedBox(height: 8),
                       Text('Address: ${_profile['address'] ?? '-'}'),
                       const SizedBox(height: 8),
-                      Text('Delivery Fee: ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${_profile['delivery_fee'] ?? 0}'),
+                      Text('Delivery Fee: Rs.${_profile['delivery_fee'] ?? 0}'),
                       const SizedBox(height: 8),
-                      Text('Min Order: ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¹${_profile['min_order'] ?? 0}'),
+                      Text('Min Order: Rs.${_profile['min_order'] ?? 0}'),
                       const SizedBox(height: 16),
                       ElevatedButton(
                         onPressed: () => setState(() { _editing = true; }),
@@ -1900,7 +1900,7 @@ class NotificationsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Mock for now ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ will integrate real notifications later
+    // Mock for now  will integrate real notifications later
     return Scaffold(
       appBar: AppBar(title: const Text('Notifications')),
       body: ListView(
