@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { pool } = require("../db");
@@ -423,6 +423,62 @@ router.post("/logout", authenticate, async (req, res) => {
         success: true,
         message: "Logout successful"
     });
+});
+
+
+/* ----------------------------------------------------------
+   POST /api/auth/admin/google
+   Firebase ID token -> verify email is an admin in users table
+   -> issue our JWT with role: 'admin'
+---------------------------------------------------------- */
+router.post('/admin/google', async (req, res) => {
+  try {
+    const { idToken } = req.body || {};
+    const decoded = await verifyIdToken(idToken);
+    const email = (decoded.email || '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Google account has no email' });
+    }
+
+    const r = await pool.query(
+      `SELECT id, name, email, phone, role, is_blocked FROM users
+       WHERE LOWER(email) = $1 AND role = 'admin' LIMIT 1`,
+      [email]
+    );
+    if (r.rows.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'This Google account is not registered as an admin.',
+      });
+    }
+
+    const admin = r.rows[0];
+    if (admin.is_blocked) {
+      return res.status(403).json({ success: false, message: 'Account is blocked.' });
+    }
+
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign(
+      { userId: admin.id, email: admin.email, role: 'admin' },
+      process.env.JWT_SECRET || 'pvl-dev-secret',
+      { expiresIn: '30d' }
+    );
+
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        phone: admin.phone,
+        role: 'admin',
+      },
+    });
+  } catch (e) {
+    console.error('Admin google auth error:', e.message);
+    return res.status(401).json({ success: false, message: e.message || 'Google verification failed' });
+  }
 });
 
 module.exports = router;
