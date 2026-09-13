@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const router = express.Router();
 
 const { pool } = require("../db");
@@ -15,6 +15,10 @@ router.get("/", async (req, res) => {
         p.price,
         p.original_price,
         p.image_url,
+        p.icon,
+        p.bg_color,
+        p.icon,
+        p.bg_color,
         p.is_active,
         p.category_id,
 
@@ -93,6 +97,10 @@ router.get("/:id", async (req, res) => {
         p.price,
         p.original_price,
         p.image_url,
+        p.icon,
+        p.bg_color,
+        p.icon,
+        p.bg_color,
         p.category_id,
         c.name AS category_name
       FROM products p
