@@ -376,6 +376,18 @@ class DeliveryService {
     );
   }
 
+  static Future<List<dynamic>> getAvailableOrders() async {
+    final res = await http.get(
+      Uri.parse('$apiBase/delivery/available'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('Available orders failed: ${res.statusCode}');
+    }
+    final data = jsonDecode(res.body);
+    return (data['orders'] as List?) ?? [];
+  }
+
 }
 
 // ============================================================
@@ -399,6 +411,7 @@ class _DeliveryHomePageState extends State<DeliveryHomePage> {
     _service = DeliveryService();
     _pages = [
       const DashboardTab(),
+      const AvailableTab(),
       const OrdersTab(),
       const EarningsTab(),
       const ProfileTab(),
@@ -425,6 +438,7 @@ class _DeliveryHomePageState extends State<DeliveryHomePage> {
         onDestinationSelected: (i) => setState(() => _selectedIndex = i),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Home'),
+          NavigationDestination(icon: Icon(Icons.list_alt_outlined), label: 'Available'),
           NavigationDestination(icon: Icon(Icons.local_shipping_outlined), label: 'Orders'),
           NavigationDestination(icon: Icon(Icons.account_balance_wallet_outlined), label: 'Earnings'),
           NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
@@ -521,6 +535,9 @@ class _DashboardTabState extends State<DashboardTab> {
       'autoConnect': true,
     });
     _socket!.onConnect((_) {
+      _socket!.emit('driver:subscribe', {
+        'deliveryPartnerId': DeliveryService.partnerId,
+      });
       _socket!.emit('delivery:join', {
         'deliveryPartnerId': DeliveryService.partnerId,
       });
@@ -532,9 +549,14 @@ class _DashboardTabState extends State<DashboardTab> {
         });
       }
     });
-    _socket!.on('new_order', (data) {
+    _socket!.on('driver:request', (data) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('New order #${data['orderId']} available!')),
+        SnackBar(
+          content: Text('New delivery available! #PVL${data['id'] ?? data['orderId'] ?? ''}'),
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(label: 'OK', onPressed: () {}),
+        ),
       );
     });
     _socket!.connect();
@@ -619,7 +641,7 @@ class _DashboardTabState extends State<DashboardTab> {
               children: [
                 _statCard('Active Orders', '$activeOrders', Icons.inventory_2, Colors.blue),
                 _statCard('Today Earnings', '\u20B9$todayEarnings', Icons.attach_money, Colors.green),
-                _statCard('Rating', '$rating ÃƒÆ’Ã‚Â¢Ãƒâ€¹Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦', Icons.star, Colors.orange),
+                _statCard('Rating', '$rating ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦', Icons.star, Colors.orange),
               ],
             ),
             const SizedBox(height: 24),
@@ -921,7 +943,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final address = _order['full_address'] ?? _order['address'] ?? _order['store_location'] ?? '';
     final isAccepted = _isOrderAccepted(_order);
 
-    // Try to get customer name and phone ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ adjust field names based on debug output
+    // Try to get customer name and phone ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ adjust field names based on debug output
     final customerName = _order['customer_name'] ?? _order['name'] ?? _order['customer']?['name'] ?? _order['store_name'] ?? '';
     final customerPhone = _order['customer_phone'] ?? _order['phone'] ?? _order['customer']?['phone'] ?? _order['store_phone'] ?? '';
 
@@ -1156,7 +1178,7 @@ class _EarningsTabState extends State<EarningsTab> {
               _statCard('Total Earnings', '\u20B9${stats['total'] ?? 0}', Icons.attach_money, Colors.green),
               _statCard('Deliveries', '${stats['deliveries'] ?? 0}', Icons.local_shipping, Colors.blue),
               _statCard('Avg per Delivery', '\u20B9${stats['avg'] ?? 0}', Icons.trending_up, Colors.purple),
-              _statCard('Rating', '${stats['rating'] ?? 0} ÃƒÆ’Ã‚Â¢Ãƒâ€¹Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦', Icons.star, Colors.orange),
+              _statCard('Rating', '${stats['rating'] ?? 0} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦', Icons.star, Colors.orange),
             ],
           ),
           const SizedBox(height: 24),
@@ -1567,6 +1589,186 @@ class PendingApprovalScreen extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+// ============================================================
+//  AVAILABLE TAB — nearby orders ready for pickup
+// ============================================================
+class AvailableTab extends StatefulWidget {
+  const AvailableTab({super.key});
+
+  @override
+  State<AvailableTab> createState() => _AvailableTabState();
+}
+
+class _AvailableTabState extends State<AvailableTab> {
+  List<dynamic> _orders = [];
+  bool _loading = true;
+  String? _error;
+  int? _acceptingId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final list = await DeliveryService.getAvailableOrders();
+      if (!mounted) return;
+      setState(() { _orders = list; _loading = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _accept(Map<String, dynamic> order) async {
+    final id = int.tryParse('${order['id']}') ?? 0;
+    if (id <= 0) return;
+    setState(() => _acceptingId = id);
+    try {
+      await DeliveryService.acceptOrder(id);
+      DeliveryService.activeOrderId = id;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Order #PVL$id accepted!')),
+      );
+      // Navigate to order detail
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => OrderDetailPage(orderId: id)),
+      );
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Accept failed: ${e.toString().replaceFirst('Exception: ', '')}')),
+      );
+    } finally {
+      if (mounted) setState(() => _acceptingId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 60, color: Colors.red),
+              const SizedBox(height: 12),
+              Text(_error!, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              ElevatedButton(onPressed: _load, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_orders.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          children: const [
+            SizedBox(height: 120),
+            Icon(Icons.inbox_outlined, size: 80, color: Colors.grey),
+            SizedBox(height: 12),
+            Center(child: Text('No deliveries available right now')),
+            SizedBox(height: 6),
+            Center(child: Text('Pull down to refresh', style: TextStyle(color: Colors.grey, fontSize: 12))),
+          ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(12),
+        itemCount: _orders.length,
+        itemBuilder: (_, i) {
+          final o = Map<String, dynamic>.from(_orders[i] as Map);
+          final id = int.tryParse('${o['id']}') ?? 0;
+          final storeName = o['store_name'] ?? 'Store';
+          final storeAddr = o['store_address'] ?? '';
+          final custAddr = o['full_address'] ?? '';
+          final total = o['total_amount'] ?? 0;
+          final accepting = _acceptingId == id;
+
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text('PVL$id', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      ),
+                      const Spacer(),
+                      Text('Rs. $total', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Icon(Icons.storefront, color: Colors.blue, size: 18),
+                      const SizedBox(width: 6),
+                      Expanded(child: Text(storeName, style: const TextStyle(fontWeight: FontWeight.w700))),
+                    ],
+                  ),
+                  if (storeAddr.toString().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 24, top: 2),
+                      child: Text(storeAddr.toString(),
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                    ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on, color: Colors.red, size: 18),
+                      const SizedBox(width: 6),
+                      Expanded(child: Text(custAddr.toString().isEmpty ? 'Customer address' : custAddr.toString(),
+                          style: const TextStyle(fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: accepting ? null : () => _accept(o),
+                      icon: accepting
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.check_circle_outline),
+                      label: Text(accepting ? 'Accepting...' : 'Accept Delivery'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
