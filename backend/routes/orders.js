@@ -203,13 +203,45 @@ router.post('/', authenticate, async (req, res) => {
 
     // Verify the address belongs to this user.
     const addressResult = await client.query(
-      'SELECT id FROM addresses WHERE id = $1 AND user_id = $2',
+        'SELECT id, latitude, longitude FROM addresses WHERE id = $1 AND user_id = $2',
       [addressId, req.userId]
     );
     if (addressResult.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Address not found' });
     }
+
+      const addr = addressResult.rows[0];
+
+      // GPS verification: recompute distance server-side (never trust client).
+      const gpsLat = Number(req.body.gpsLat);
+      const gpsLng = Number(req.body.gpsLng);
+      let gpsDistanceMeters = null;
+      let codAllowed = true;
+      let codBlockReason = null;
+      if (
+        Number.isFinite(gpsLat) &&
+        Number.isFinite(gpsLng) &&
+        addr.latitude != null &&
+        addr.longitude != null
+      ) {
+        gpsDistanceMeters = Math.round(
+          distanceInMeters(gpsLat, gpsLng, Number(addr.latitude), Number(addr.longitude))
+        );
+        if (gpsDistanceMeters > COD_MAX_DISTANCE_METERS) {
+          codAllowed = false;
+          codBlockReason = 'You are ' + gpsDistanceMeters + 'm away from this address. COD available only within ' + COD_MAX_DISTANCE_METERS + 'm - please pay online.';
+        }
+      }
+
+      if (paymentMethod === 'COD' && !codAllowed) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: codBlockReason,
+          code: 'COD_DISTANCE_BLOCK',
+        });
+      }
 
     // Server-side authoritative cart.
     const cartRows = await loadServerCart(client, req.userId);
@@ -255,14 +287,20 @@ router.post('/', authenticate, async (req, res) => {
       `INSERT INTO orders (
          user_id, store_id, address_id, status,
          subtotal, delivery_fee, discount, total_amount,
-         payment_method, payment_status, notes
-       ) VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8, $9, $10)
+           payment_method, payment_status, notes,
+           gps_lat, gps_lng, gps_distance_meters, cod_allowed, cod_block_reason
+         ) VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8, $9, $10,
+                   $11, $12, $13, $14, $15)
        RETURNING id, status, subtotal, delivery_fee, discount, total_amount,
-                 payment_method, payment_status, created_at`,
+                   payment_method, payment_status, created_at,
+                   gps_distance_meters, cod_allowed`,
       [
         req.userId, storeId, addressId,
         subtotal, deliveryFee, discount, totalAmount,
-        paymentMethod, paymentStatus, notes,
+          paymentMethod, paymentStatus, notes,
+          Number.isFinite(gpsLat) ? gpsLat : null,
+          Number.isFinite(gpsLng) ? gpsLng : null,
+          gpsDistanceMeters, codAllowed, codBlockReason,
       ]
     );
     const order = orderResult.rows[0];
