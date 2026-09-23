@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="description" content="PVL Mart — Everything you need. Delivered simply.">
+<meta name="theme-color" content="#7C3AED">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PVL Mart">
+<title>PVL Mart — Everything you need. Delivered simply.</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237C3AED'/%3E%3Cpath d='M9 21V11h5a3 3 0 0 1 0 6H12v4z' fill='white'/%3E%3Ccircle cx='22' cy='19' r='2' fill='white'/%3E%3C/svg%3E">
+<style>
+/* ---------- Reset & base ---------- */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;scroll-behavior:smooth;scroll-padding-top:80px}
+body{
+  margin:0;
+  overflow-x:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  color:var(--ink);background:var(--bg);line-height:1.5;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+img,svg{max-width:100%;display:block}
+a{color:inherit;text-decoration:none}
+
+/* ---------- Tokens ---------- */
+:root{
+  --brand:#7C3AED; --brand-dark:#5B21B6; --brand-light:#F5F3FF;
+  --ink:#0F172A; --muted:#64748B; --line:#E5E7EB; --bg:#FBFBFD; --card:#FFFFFF;
+  --radius:16px; --radius-sm:12px;
+  --pad-x:clamp(16px,4vw,32px);
+  --gap:clamp(12px,2vw,20px);
+  --section-y:clamp(40px,7vw,72px);
+  --max-w:1180px;
+  --safe-l:env(safe-area-inset-left,0);
+  --safe-r:env(safe-area-inset-right,0);
+  --safe-b:env(safe-area-inset-bottom,0);
+}
+.container{
+  max-width:var(--max-w);margin:0 auto;
+  padding-left:calc(var(--pad-x) + var(--safe-l));
+  padding-right:calc(var(--pad-x) + var(--safe-r));
+}
+
+/* ---------- Header ---------- */
+header{
+  position:sticky;top:0;z-index:50;
+  background:rgba(251,251,253,.85);
+  backdrop-filter:saturate(180%) blur(14px);
+  -webkit-backdrop-filter:saturate(180%) blur(14px);
+  border-bottom:1px solid var(--line);
+}
+.nav{display:flex;align-items:center;justify-content:space-between;gap:clamp(12px,2vw,24px);padding-top:clamp(10px,1.6vw,16px);padding-bottom:clamp(10px,1.6vw,16px);min-height:56px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.3px;font-size:clamp(16px,1.4vw,18px);flex-shrink:0}
+.logo .mark{
+  width:clamp(28px,3vw,34px);height:clamp(28px,3vw,34px);
+  border-radius:9px;background:var(--brand);display:grid;place-items:center;
+  color:#fff;font-weight:900;font-size:clamp(14px,1.5vw,17px);
+}
+.nav-links{display:flex;gap:clamp(14px,2vw,26px);font-size:clamp(13px,1.1vw,14px);color:var(--muted);font-weight:500;margin-left:auto;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
+.nav-links::-webkit-scrollbar{display:none}
+.nav-links a{padding:8px 2px;white-space:nowrap;transition:color .15s}
+.nav-links a:hover{color:var(--ink)}
+
+/* On very narrow screens, allow the nav links to wrap and shrink */
+@media (max-width:600px){.nav{flex-wrap:wrap;row-gap:8px;justify-content:flex-start}.nav-links{margin-left:0;width:100%;justify-content:flex-start;gap:18px;padding-top:8px;border-top:1px solid var(--line)}}
+
+/* ---------- Hero ---------- */
+.hero{
+  padding:clamp(40px,9vw,88px) 0 clamp(32px,6vw,64px);
+  text-align:center;
+}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:6px clamp(10px,1.5vw,14px);border-radius:999px;
+  background:var(--brand-light);color:var(--brand);
+  font-weight:800;font-size:clamp(10px,1vw,11px);letter-spacing:1.4px;
+}
+.hero h1{
+  font-size:clamp(34px,7vw,68px);
+  font-weight:800;letter-spacing:-1.5px;
+  margin:clamp(14px,2.5vw,22px) 0 clamp(8px,1.5vw,14px);
+  line-height:1.05;
+}
+.hero .tagline{
+  font-size:clamp(15px,2vw,20px);color:var(--muted);
+  max-width:600px;margin:0 auto clamp(20px,3vw,30px);
+  padding:0 8px;
+}
+.hero-cta{
+  display:flex;gap:12px;justify-content:center;flex-wrap:wrap;
+}
+
+/* ---------- Buttons ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:clamp(11px,1.3vw,14px) clamp(18px,2.2vw,26px);
+  border-radius:var(--radius-sm);
+  font-weight:600;font-size:clamp(14px,1.2vw,15px);
+  transition:transform .15s,box-shadow .15s,border-color .15s,background .15s;
+  min-height:44px;cursor:pointer;
+  border:1px solid transparent;
+}
+.btn.primary{background:var(--brand);color:#fff;box-shadow:0 6px 18px rgba(124,58,237,.28)}
+.btn.primary:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(124,58,237,.35)}
+.btn.primary:active{transform:translateY(0)}
+.btn.ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+.btn.ghost:hover{border-color:#cbd5e1;background:#f8fafc}
+
+@media (max-width:440px){
+  .hero-cta{flex-direction:column;align-items:stretch}
+  .hero-cta .btn{width:100%}
+}
+
+/* ---------- Sections ---------- */
+.section{padding:clamp(20px,3vw,36px) 0}
+.section h2{
+  font-size:clamp(20px,3vw,30px);font-weight:800;letter-spacing:-.6px;
+  margin:0 0 clamp(4px,1vw,8px);line-height:1.2;
+}
+.section .sub{
+  color:var(--muted);margin:0 0 clamp(18px,3vw,28px);
+  font-size:clamp(14px,1.3vw,15px);max-width:640px;
+}
+
+/* ---------- Responsive auto-fit grids ---------- */
+.grid{
+  display:grid;gap:var(--gap);
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));
+}
+.grid.eco{grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr))}
+.grid.dl {grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}
+
+/* ---------- Ecosystem cards ---------- */
+.eco-card{
+  display:flex;flex-direction:column;gap:clamp(10px,1.3vw,14px);
+  padding:clamp(18px,2.4vw,24px);
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  transition:transform .18s,box-shadow .18s,border-color .18s;
+  min-height:200px;
+}
+.eco-card:hover{transform:translateY(-3px);box-shadow:0 14px 30px rgba(15,23,42,.06);border-color:#d8b4fe}
+.eco-card .icon{
+  width:clamp(40px,4vw,48px);height:clamp(40px,4vw,48px);
+  border-radius:12px;background:var(--brand-light);color:var(--brand);
+  display:grid;place-items:center;font-size:clamp(20px,2.4vw,24px);
+}
+.eco-card h3{
+  margin:2px 0 0;font-size:clamp(16px,1.6vw,18px);
+  font-weight:700;letter-spacing:-.2px;line-height:1.25;
+}
+.eco-card p{margin:0;color:var(--muted);font-size:clamp(13px,1.1vw,14px);line-height:1.5}
+.eco-card .go{
+  margin-top:auto;padding-top:6px;
+  font-size:clamp(12.5px,1.05vw,13.5px);font-weight:600;color:var(--brand);
+  display:flex;align-items:center;gap:4px;
+}
+
+/* ---------- Download cards ---------- */
+.dl-card{
+  display:flex;flex-direction:column;gap:clamp(10px,1.3vw,14px);
+  padding:clamp(18px,2.4vw,22px);
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+}
+.dl-card h3{margin:0;font-size:clamp(15px,1.5vw,17px);font-weight:700;line-height:1.25}
+.dl-card p{
+  margin:0;color:var(--muted);font-size:clamp(12.5px,1.1vw,13.5px);
+  line-height:1.5;min-height:2.8em;
+}
+.dl-card .btn{width:100%;justify-content:center;padding:11px 14px;font-size:clamp(13px,1.15vw,14px)}
+
+/* ---------- Admin reveal ---------- */
+[data-admin-only]{display:none!important}
+body.reveal-admin [data-admin-only]{display:flex!important}
+body.reveal-admin .grid.dl,
+body.reveal-admin .grid.eco{
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));
+}
+
+/* ---------- Footer ---------- */
+footer{
+  border-top:1px solid var(--line);
+  margin-top:clamp(32px,6vw,56px);
+  padding:clamp(20px,3vw,32px) 0 calc(clamp(20px,3vw,32px) + var(--safe-b));
+  text-align:center;color:var(--muted);font-size:clamp(12.5px,1.1vw,13.5px);
+}
+footer .dot{opacity:.35;cursor:default;user-select:none;padding:0 4px}
+
+/* ---------- Very small screens ---------- */
+@media (max-width:360px){
+  :root{--pad-x:14px;--gap:10px}
+  .logo span:last-child{display:none} /* keep mark, drop wordmark */
+  .hero h1{letter-spacing:-1px}
+}
+
+/* ---------- Wide screens ---------- */
+@media (min-width:1440px){
+  :root{--max-w:1280px}
+  .eco-card{min-height:220px}
+}
+
+/* ---------- Prefers reduced motion ---------- */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}
+}
+
+/* ---------- Dark mode ---------- */
+@media (prefers-color-scheme:dark){
+  :root{
+    --ink:#E5E7EB; --muted:#94A3B8; --line:#1E293B;
+    --bg:#0B1220; --card:#0F172A; --brand-light:#1E1B4B;
+  }
+  header{background:rgba(11,18,32,.85)}
+  .btn.ghost{background:#0F172A;color:var(--ink);border-color:var(--line)}
+  .btn.ghost:hover{background:#1E293B;border-color:#334155}
+  .eco-card:hover{box-shadow:0 14px 30px rgba(0,0,0,.35);border-color:#7C3AED}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <div class="logo"><span class="mark">P</span><span>PVL Mart</span></div>
+    <nav class="nav-links">
+      <a data-link="customerWeb">Shop</a>
+      <a data-link="storeWeb">For Stores</a>
+      <a data-link="deliveryWeb">For Drivers</a>
+      <a href="#downloads">Downloads</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="container">
+      <span class="eyebrow">WELCOME</span>
+      <h1>PVL Mart</h1>
+      <p class="tagline">Everything you need. Delivered simply.</p>
+      <div class="hero-cta">
+        <a class="btn primary" data-link="customerWeb">Start shopping</a>
+        <a class="btn ghost" href="#downloads">Download apps</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="platform">
+    <div class="container">
+      <h2>The PVL Mart platform</h2>
+      <p class="sub">One ecosystem. Four apps. Built for everyday essentials.</p>
+      <div class="grid eco">
+        <a class="eco-card" data-link="customerWeb">
+          <div class="icon">🛍️</div>
+          <h3>Customer</h3>
+          <p>Shop groceries and everyday essentials.</p>
+          <span class="go">Shop now →</span>
+        </a>
+        <a class="eco-card" data-link="storeWeb">
+          <div class="icon">🏪</div>
+          <h3>Store</h3>
+          <p>Manage your store, products, inventory and orders.</p>
+          <span class="go">Store dashboard →</span>
+        </a>
+        <a class="eco-card" data-link="deliveryWeb">
+          <div class="icon">🛵</div>
+          <h3>Delivery Partner</h3>
+          <p>Accept deliveries, navigate to customers and update delivery status.</p>
+          <span class="go">Partner login →</span>
+        </a>
+        <a class="eco-card" data-link="adminWeb" data-admin-only>
+          <div class="icon">🛡️</div>
+          <h3>Admin</h3>
+          <p>Manage stores, customers, delivery partners, products and orders.</p>
+          <span class="go">Admin console →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="downloads">
+    <div class="container">
+      <h2>Download PVL Mart apps</h2>
+      <p class="sub">Direct Android APK downloads — no app store required.</p>
+      <div class="grid dl">
+        <div class="dl-card">
+          <h3>Customer App</h3>
+          <p>Shop groceries and everyday essentials.</p>
+          <a class="btn ghost" data-link="apkCustomer" download>Download APK</a>
+        </div>
+        <div class="dl-card">
+          <h3>Store App</h3>
+          <p>Manage your store and orders.</p>
+          <a class="btn ghost" data-link="apkStore" download>Download APK</a>
+        </div>
+        <div class="dl-card">
+          <h3>Delivery Partner App</h3>
+          <p>Accept and manage deliveries.</p>
+          <a class="btn ghost" data-link="apkDelivery" download>Download APK</a>
+        </div>
+        <div class="dl-card" data-admin-only>
+          <h3>Admin App</h3>
+          <p>Manage the PVL Mart platform.</p>
+          <a class="btn ghost" data-link="apkAdmin" download>Download APK</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="container">
+    © PVL Mart <span class="dot" id="adminDot">·</span>
+  </div>
+</footer>
+
+<script>
+const CONFIG = {
+  customerWeb:  '/customer/',
+  storeWeb:     '/store/',
+  deliveryWeb:  '/delivery/',
+  adminWeb:     '/admin/',
+  apkCustomer:  '/downloads/customer-app.apk',
+  apkStore:     '/downloads/store-app.apk',
+  apkDelivery:  '/downloads/delivery-app.apk',
+  apkAdmin:     '/downloads/admin-app.apk',
+};
+
+document.querySelectorAll('[data-link]').forEach(el => {
+  const key = el.getAttribute('data-link');
+  if (CONFIG[key]) el.setAttribute('href', CONFIG[key]);
+});
+
+(function(){
+  const KEY = 'pvl_mart_admin_reveal';
+  const params = new URLSearchParams(location.search);
+  if (params.get('admin') === '1') localStorage.setItem(KEY, '1');
+  if (params.get('admin') === '0') localStorage.removeItem(KEY);
+
+  function apply(){
+    if (localStorage.getItem(KEY) === '1') document.body.classList.add('reveal-admin');
+    else document.body.classList.remove('reveal-admin');
+  }
+  apply();
+
+  let buf = '';
+  document.addEventListener('keydown', e => {
+    if (e.key.length !== 1) return;
+    buf = (buf + e.key.toLowerCase()).slice(-8);
+    if (buf === 'pvladmin') {
+      localStorage.setItem(KEY, '1');
+      apply();
+      buf = '';
+    }
+  });
+
+  const dot = document.getElementById('adminDot');
+  let taps = 0, timer = null;
+  dot.addEventListener('click', () => {
+    taps++;
+    clearTimeout(timer);
+    timer = setTimeout(() => { taps = 0; }, 1200);
+    if (taps >= 5) {
+      localStorage.setItem(KEY, '1');
+      apply();
+      taps = 0;
+    }
+  });
+})();
+</script>
+</body>
+</html>
