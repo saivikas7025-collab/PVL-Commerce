@@ -1,0 +1,159 @@
+﻿import 'package:flutter/material.dart';
+import '../services/store_dispatch_api.dart';
+
+class StoreOrderInboxScreen extends StatefulWidget {
+  final int storeId;
+  const StoreOrderInboxScreen({super.key, this.storeId = 1});
+  @override
+  State<StoreOrderInboxScreen> createState() => _StoreOrderInboxScreenState();
+}
+
+class _StoreOrderInboxScreenState extends State<StoreOrderInboxScreen> {
+  late Future<List<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  void _reload() {
+    setState(() { _future = StoreDispatchApi.inbox(widget.storeId); });
+  }
+
+  Future<void> _accept(int orderId) async {
+    try {
+      final r = await StoreDispatchApi.accept(widget.storeId, orderId);
+      if (!mounted) return;
+      final d = r['driver'];
+      final msg = (d is Map && d['ok'] == true)
+          ? 'Accepted. Driver #${d['driverId']} offered.'
+          : 'Accepted. No driver available.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      _reload();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _reject(int orderId) async {
+    final ctrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject order'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(hintText: 'Reason'), maxLines: 2),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    if (reason == null || reason.isEmpty) return;
+    try {
+      await StoreDispatchApi.reject(widget.storeId, orderId, reason);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rejected')));
+      _reload();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Order Inbox'),
+        actions: [IconButton(onPressed: _reload, icon: const Icon(Icons.refresh))],
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          if (snap.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                  const SizedBox(height: 12),
+                  Text('${snap.error}', textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  FilledButton(onPressed: _reload, child: const Text('Retry')),
+                ]),
+              ),
+            );
+          }
+          final offers = snap.data ?? const [];
+          if (offers.isEmpty) return const Center(child: Text('No pending offers'));
+          return RefreshIndicator(
+            onRefresh: () async => _reload(),
+            child: ListView.separated(
+              itemCount: offers.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, i) {
+                final o = offers[i];
+                final items = (o['items'] as List?) ?? const [];
+                final orderId = o['order_id'] as int;
+                return Card(
+                  margin: const EdgeInsets.all(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Expanded(child: Text('Order #$orderId',
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16))),
+                          Text('₹${o['total_amount'] ?? '?'}',
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                        ]),
+                        const SizedBox(height: 4),
+                        Text('Score ${o['score'] ?? '-'}',
+                            style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                        const Divider(height: 20),
+                        for (final it in items)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(children: [
+                              Expanded(child: Text('${it['name'] ?? 'Item'}')),
+                              Text('x${it['qty'] ?? '?'}'),
+                            ]),
+                          ),
+                        const SizedBox(height: 12),
+                        Row(children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _reject(orderId),
+                              icon: const Icon(Icons.close),
+                              label: const Text('Reject'),
+                              style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: () => _accept(orderId),
+                              icon: const Icon(Icons.check),
+                              label: const Text('Accept'),
+                            ),
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}

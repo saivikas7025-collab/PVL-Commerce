@@ -1,0 +1,472 @@
+/**
+ * Customer orders API.
+ *
+ * Every route requires a valid JWT. Prices, subtotal, delivery fee and
+ * total are always calculated on the server from the authenticated user's
+ * cart â€” never from the client body.
+ */
+const express = require('express');
+const dispatchEngine = require('../services/dispatchEngine');
+const { pool } = require('../db');
+const { authenticate } = require('../middleware/auth');
+
+const router = express.Router();
+
+const ALLOWED_STATUSES = [
+  'pending',
+  'accepted',
+  'preparing',
+  'ready_for_pickup',
+  'assigned',
+  'picked_up',
+  'out_for_delivery',
+  'delivered',
+  'cancelled',
+];
+
+const ALLOWED_PAYMENT_METHODS = ['COD', 'RAZORPAY', 'UPI'];
+
+const DEFAULT_DELIVERY_FEE = Number(process.env.DEFAULT_DELIVERY_FEE || 2500) / 100;
+const COD_ENABLED = String(process.env.COD_ENABLED || 'true').toLowerCase() === 'true';
+const COD_MAX_DISTANCE_METERS = 200;
+
+/** Haversine distance in metres. */
+function distanceInMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Load the authenticated user's cart with authoritative product prices.
+ * Returns `null` when the cart is empty.
+ */
+async function loadServerCart(client, userId) {
+  const { rows } = await client.query(
+    `SELECT
+       ci.product_id,
+       p.name,
+       p.unit,
+       p.is_active,
+       p.price::numeric AS server_price,
+       ci.quantity
+     FROM carts c
+     JOIN cart_items ci ON ci.cart_id = c.id
+     JOIN products p ON p.id = ci.product_id
+     WHERE c.user_id = $1
+     ORDER BY ci.id
+     FOR UPDATE OF ci, p`,
+    [userId]
+  );
+  if (rows.length === 0) return null;
+  return rows;
+}
+
+// ================================================================
+// GET /api/orders  â†’ list current user's orders
+// ================================================================
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         o.id, o.user_id, o.store_id, o.address_id, o.status,
+         o.subtotal, o.delivery_fee, o.discount, o.total_amount,
+         o.payment_method, o.payment_status, o.notes,
+          o.created_at, o.updated_at,
+
+         a.label AS address_label, a.full_address, a.city,
+         a.state, a.pincode, a.latitude, a.longitude,
+
+         COALESCE((
+           SELECT json_agg(
+             json_build_object(
+               'id', oi.id,
+               'product_id', oi.product_id,
+               'product_name', oi.product_name,
+               'quantity', oi.quantity,
+               'price', oi.price,
+               'total_price', oi.total_price
+             ) ORDER BY oi.id
+           )
+           FROM order_items oi WHERE oi.order_id = o.id
+         ), '[]'::json) AS items
+       FROM orders o
+       LEFT JOIN addresses a ON a.id = o.address_id
+       WHERE o.user_id = $1
+       ORDER BY o.created_at DESC`,
+      [req.userId]
+    );
+    res.json({ success: true, count: result.rows.length, orders: result.rows });
+  } catch (error) {
+    console.error('List orders error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load orders' });
+  }
+});
+
+// ================================================================
+// GET /api/orders/:orderId  â†’ single order detail (owned by user)
+// ================================================================
+router.get('/:orderId', authenticate, async (req, res) => {
+  try {
+    const orderId = Number(req.params.orderId);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid order ID' });
+    }
+
+    const order = await pool.query(
+      `SELECT o.*,
+              a.label AS address_label, a.full_address, a.city, a.state,
+              a.pincode, a.latitude, a.longitude
+       FROM orders o
+       LEFT JOIN addresses a ON a.id = o.address_id
+       WHERE o.id = $1 AND o.user_id = $2`,
+      [orderId, req.userId]
+    );
+    if (order.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+
+        // Fetch status history for the timeline (best effort).
+    let historyRows = [];
+    try {
+      const h = await pool.query(
+        'SELECT status, note, created_at FROM order_status_history WHERE order_id = $1 ORDER BY created_at ASC',
+        [orderId]
+      );
+      historyRows = h.rows;
+    } catch (_) { historyRows = []; }
+
+    const items = await pool.query(
+      `SELECT id, product_id, product_name, quantity, price, total_price
+       FROM order_items WHERE order_id = $1 ORDER BY id`,
+      [orderId]
+    );
+
+    const history = await pool.query(
+      `SELECT id, status, note, created_at
+       FROM order_status_history
+       WHERE order_id = $1 ORDER BY created_at ASC`,
+      [orderId]
+    );
+
+    const payment = await pool.query(
+      `SELECT id, payment_method, status, amount, transaction_id, created_at
+       FROM payments WHERE order_id = $1 ORDER BY id DESC LIMIT 1`,
+      [orderId]
+    );
+
+    res.json({
+      success: true,
+      order: {
+        ...order.rows[0],
+        items: items.rows,
+        status_history: history.rows,
+        payment: payment.rows[0] || null,
+      },
+    });
+  } catch (error) {
+    console.error('Get order error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load order' });
+  }
+});
+
+// ================================================================
+// POST /api/orders  â†’ CREATE order from cart + address
+//
+// Body: { addressId, paymentMethod, notes? }
+//
+// The server:
+//   - authenticates the user
+//   - locks their cart rows
+//   - re-reads each product price
+//   - picks the store (single-store MVP: uses first product's store)
+//   - calculates subtotal, delivery_fee, total server-side
+//   - creates an `orders` row in status='pending', payment_status='pending'
+//   - copies cart lines into order_items (product_name + server price)
+//   - inserts an order_status_history row
+//   - inserts a 'created' payments row
+//   - clears the cart
+// The client never dictates the total.
+// ================================================================
+router.post('/', authenticate, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const addressId = Number(req.body.addressId);
+    const paymentMethod = String(req.body.paymentMethod || 'COD').toUpperCase();
+    const notes = req.body.notes ? String(req.body.notes).slice(0, 500) : null;
+
+    if (!Number.isInteger(addressId) || addressId <= 0) {
+      /* __AUTO_DISPATCH_PATCHED__ */
+    try {
+      const lastOrder = await pool.query('SELECT id FROM orders WHERE user_id=$1 ORDER BY id DESC LIMIT 1', [req.userId || req.user?.id || req.body.userId]);
+      if (lastOrder.rowCount > 0) {
+        dispatchEngine.dispatchOrder(lastOrder.rows[0].id).catch(err =>
+          console.error('[auto-dispatch] order', lastOrder.rows[0].id, 'failed:', err.message)
+        );
+      }
+    } catch (e) {
+      console.error('[auto-dispatch] trigger failed:', e.message);
+    }
+    return res.status(400).json({ success: false, message: 'A delivery address is required' });
+    }
+    if (!ALLOWED_PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({ success: false, message: 'Unsupported payment method' });
+    }
+    if (paymentMethod === 'COD' && !COD_ENABLED) {
+      return res.status(400).json({ success: false, message: 'Cash on Delivery is disabled' });
+    }
+
+    await client.query('BEGIN');
+
+    // Verify the address belongs to this user.
+    const addressResult = await client.query(
+        'SELECT id, latitude, longitude FROM addresses WHERE id = $1 AND user_id = $2',
+      [addressId, req.userId]
+    );
+    if (addressResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Address not found' });
+    }
+
+      const addr = addressResult.rows[0];
+
+      // GPS verification: recompute distance server-side (never trust client).
+      const gpsLat = Number(req.body.gpsLat);
+      const gpsLng = Number(req.body.gpsLng);
+      let gpsDistanceMeters = null;
+      let codAllowed = true;
+      let codBlockReason = null;
+      if (
+        Number.isFinite(gpsLat) &&
+        Number.isFinite(gpsLng) &&
+        addr.latitude != null &&
+        addr.longitude != null
+      ) {
+        gpsDistanceMeters = Math.round(
+          distanceInMeters(gpsLat, gpsLng, Number(addr.latitude), Number(addr.longitude))
+        );
+        if (gpsDistanceMeters > COD_MAX_DISTANCE_METERS) {
+          codAllowed = false;
+          codBlockReason = 'You are ' + gpsDistanceMeters + 'm away from this address. COD available only within ' + COD_MAX_DISTANCE_METERS + 'm - please pay online.';
+        }
+      }
+
+      if (paymentMethod === 'COD' && !codAllowed) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: codBlockReason,
+          code: 'COD_DISTANCE_BLOCK',
+        });
+      }
+
+    // Server-side authoritative cart.
+    const cartRows = await loadServerCart(client, req.userId);
+    if (!cartRows) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Your cart is empty' });
+    }
+    for (const row of cartRows) {
+      if (!row.is_active) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `"${row.name}" is no longer available. Please remove it and try again.`,
+        });
+      }
+    }
+
+    // Server calculates totals from server prices.
+    const subtotal = cartRows.reduce(
+      (sum, r) => sum + Number(r.server_price) * Number(r.quantity),
+      0
+    );
+    const deliveryFee = DEFAULT_DELIVERY_FEE;
+    const discount = 0;
+    const totalAmount = Math.max(0, subtotal + deliveryFee - discount);
+
+    // For the MVP the platform is single-store, so use store 1 by default.
+    // In a real multi-store setup you'd derive this from products.store_id
+    // and reject a cart with items from multiple stores.
+    const storeResult = await client.query(
+      `SELECT id FROM stores WHERE is_active = TRUE ORDER BY id LIMIT 1`
+    );
+    if (storeResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(503).json({ success: false, message: 'No stores are currently open' });
+    }
+    const storeId = storeResult.rows[0].id;
+
+    // COD â†’ payment_status pending; online payments stay pending until captured.
+    const paymentStatus = 'pending';
+
+    const orderResult = await client.query(
+      `INSERT INTO orders (
+         user_id, store_id, address_id, status,
+         subtotal, delivery_fee, discount, total_amount,
+           payment_method, payment_status, notes,
+           gps_lat, gps_lng, gps_distance_meters, cod_allowed, cod_block_reason
+         ) VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8, $9, $10,
+                   $11, $12, $13, $14, $15)
+       RETURNING id, status, subtotal, delivery_fee, discount, total_amount,
+                   payment_method, payment_status, created_at,
+                   gps_distance_meters, cod_allowed`,
+      [
+        req.userId, storeId, addressId,
+        subtotal, deliveryFee, discount, totalAmount,
+          paymentMethod, paymentStatus, notes,
+          Number.isFinite(gpsLat) ? gpsLat : null,
+          Number.isFinite(gpsLng) ? gpsLng : null,
+          gpsDistanceMeters, codAllowed, codBlockReason,
+      ]
+    );
+    const order = orderResult.rows[0];
+
+    for (const row of cartRows) {
+      const price = Number(row.server_price);
+      const qty = Number(row.quantity);
+      await client.query(
+        `INSERT INTO order_items
+           (order_id, product_id, product_name, quantity, price, total_price)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [order.id, row.product_id, row.name, qty, price, price * qty]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO order_status_history (order_id, status, note)
+       VALUES ($1, 'pending', $2)`,
+      [order.id, `Order placed by user ${req.userId}`]
+    );
+
+    await client.query(
+        `INSERT INTO payments
+           (order_id, payment_method, amount, status)
+         VALUES ($1, $2, $3, 'pending')`,
+        [order.id, paymentMethod, totalAmount]
+      );
+
+    // Empty the cart NOW only for COD orders. For online payments we keep
+    // the cart intact until the payment is verified â€” that way an abandoned
+    // Razorpay checkout doesn't leave the shopper with an empty basket AND
+    // an unpaid order.
+    if (paymentMethod === 'COD') {
+      await client.query(
+        `DELETE FROM cart_items ci
+         USING carts c
+         WHERE ci.cart_id = c.id AND c.user_id = $1`,
+        [req.userId]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    // For COD we consider the order confirmed the moment it's placed â€”
+    // the store will accept from its dashboard. The customer app will
+    // show the confirmation screen with this order object.
+    if (paymentMethod === 'COD') {
+      // Fire realtime notification for the store.
+      const io = req.app.get('io');
+      if (io) io.to(`store_${storeId}`).emit('order:new', { orderId: order.id });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Order created successfully',
+      order,
+      requires_payment: paymentMethod !== 'COD',
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Create order error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create order' });
+  } finally {
+    client.release();
+  }
+});
+
+// ================================================================
+// PUT /api/orders/:orderId/status  â†’ transition status (store/delivery/admin only)
+//
+// The customer app CANNOT call this; the middleware only allows non-customer
+// roles. This route is used by the store and delivery apps.
+// ================================================================
+router.put('/:orderId/status', authenticate, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    if (req.userRole === 'customer') {
+      return res.status(403).json({ success: false, message: 'Not allowed' });
+    }
+    const orderId = Number(req.params.orderId);
+    const status = String(req.body.status || '').toLowerCase();
+    const note = req.body.note ? String(req.body.note).slice(0, 500) : null;
+
+    if (!Number.isInteger(orderId) || !ALLOWED_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Allowed: ${ALLOWED_STATUSES.join(', ')}`,
+      });
+    }
+
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE orders
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING id, user_id, store_id, status`,
+      [status, orderId]
+    );
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    await client.query(
+      `INSERT INTO order_status_history (order_id, status, note)
+       VALUES ($1, $2, $3)`,
+      [orderId, status, note]
+    );
+    await client.query('COMMIT');
+
+    const io = req.app.get('io');
+    if (io) io.to(`order_${orderId}`).emit('order:status', result.rows[0]);
+
+    res.json({ success: true, order: result.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Update order status error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update order' });
+  } finally {
+    client.release();
+  }
+});
+
+// ================================================================
+// Legacy: GET /api/orders/user/:userId  (kept for backwards compat)
+// ================================================================
+router.get('/user/:userId', authenticate, async (req, res) => {
+  try {
+    const requested = Number(req.params.userId);
+    if (requested !== req.userId && req.userRole !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Not allowed' });
+    }
+    const result = await pool.query(
+      `SELECT id, status, total_amount, payment_method, payment_status, created_at
+       FROM orders WHERE user_id = $1 ORDER BY created_at DESC`,
+      [requested]
+    );
+    res.json({ success: true, orders: result.rows });
+  } catch (error) {
+    console.error('Legacy list orders error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load orders' });
+  }
+});
+
+module.exports = router;
+
+
+

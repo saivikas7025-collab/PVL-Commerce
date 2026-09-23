@@ -22,3 +22,17 @@ subprojects {
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
+
+// Force plugin compileSdk via plugins.withId (safe, no afterEvaluate timing issue)
+subprojects {
+    plugins.withId("com.android.library") {
+        extensions.configure<com.android.build.gradle.BaseExtension>("android") {
+            compileSdkVersion(36)
+        }
+    }
+    plugins.withId("com.android.application") {
+        extensions.configure<com.android.build.gradle.BaseExtension>("android") {
+            compileSdkVersion(36)
+        }
+    }
+}

@@ -29,3 +29,9 @@ Thumbs.db
 
 # Firebase service account (never commit)
 backend/secrets/
+
+# secrets — never commit
+backend/token.json
+backend/scripts/pvl-drive-credentials.json
+*.bak
+**/*.bak

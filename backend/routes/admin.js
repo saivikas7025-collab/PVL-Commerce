@@ -653,4 +653,231 @@ router.get("/export/orders.csv", async (req, res) => {
   } catch (e) { res.status(500).send('Error: ' + e.message); }
 });
 
+/* ==========================================================
+   STORE ONBOARDING — ADMIN REVIEW QUEUE
+   ========================================================== */
+
+router.get('/store-applications', async (req, res) => {
+  const status = String(req.query.status || 'pending');
+  try {
+    const r = await pool.query(
+      `SELECT id, name, legal_name, owner_name, business_type,
+              phone, email, city, state,
+              categories, approval_status,
+              created_at
+         FROM stores
+        WHERE ($1::text = 'all' OR approval_status = $1)
+        ORDER BY created_at DESC
+        LIMIT 200`,
+      [status]
+    );
+    return res.json({ success: true, stores: r.rows });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.get('/store-applications/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'Invalid id' });
+  try {
+    const store = await pool.query(`SELECT * FROM stores WHERE id = $1`, [id]);
+    if (!store.rowCount) return res.status(404).json({ success: false, message: 'Not found' });
+    const docs = await pool.query(
+      `SELECT id, doc_type, doc_url, uploaded_at FROM store_documents WHERE store_id = $1 ORDER BY id`,
+      [id]
+    );
+    const history = await pool.query(
+      `SELECT action, from_status, to_status, actor, note, created_at
+         FROM store_approval_history
+        WHERE store_id = $1
+        ORDER BY id DESC`,
+      [id]
+    );
+    return res.json({
+      success: true,
+      store: store.rows[0],
+      documents: docs.rows,
+      history: history.rows,
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/store-applications/:id/approve', async (req, res) => {
+  const id = Number(req.params.id);
+  const actor = String((req.body && req.body.actor) || 'admin');
+  try {
+    const before = await pool.query(`SELECT approval_status FROM stores WHERE id = $1`, [id]);
+    if (!before.rowCount) return res.status(404).json({ success: false, message: 'Not found' });
+    await pool.query(
+      `UPDATE stores
+          SET approval_status = 'approved',
+              is_active = TRUE,
+              approved_at = now(),
+              approved_by = $1
+        WHERE id = $2`,
+      [actor, id]
+    );
+    await pool.query(
+      `INSERT INTO store_approval_history (store_id, action, from_status, to_status, actor, note)
+       VALUES ($1, 'APPROVED', $2, 'approved', $3, $4)`,
+      [id, before.rows[0].approval_status, actor, (req.body && req.body.note) || null]
+    );
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/store-applications/:id/reject', async (req, res) => {
+  const id = Number(req.params.id);
+  const reason = String((req.body && req.body.reason) || '').trim();
+  const actor = String((req.body && req.body.actor) || 'admin');
+  if (!reason) return res.status(400).json({ success: false, message: 'Rejection reason required' });
+  try {
+    const before = await pool.query(`SELECT approval_status FROM stores WHERE id = $1`, [id]);
+    if (!before.rowCount) return res.status(404).json({ success: false, message: 'Not found' });
+    await pool.query(
+      `UPDATE stores SET approval_status = 'rejected', rejection_reason = $1 WHERE id = $2`,
+      [reason, id]
+    );
+    await pool.query(
+      `INSERT INTO store_approval_history (store_id, action, from_status, to_status, actor, note)
+       VALUES ($1, 'REJECTED', $2, 'rejected', $3, $4)`,
+      [id, before.rows[0].approval_status, actor, reason]
+    );
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/store-applications/:id/request-info', async (req, res) => {
+  const id = Number(req.params.id);
+  const note = String((req.body && req.body.note) || '').trim();
+  const actor = String((req.body && req.body.actor) || 'admin');
+  if (!note) return res.status(400).json({ success: false, message: 'Note required' });
+  try {
+    await pool.query(
+      `UPDATE stores SET approval_status = 'more_info_required', rejection_reason = $1 WHERE id = $2`,
+      [note, id]
+    );
+    await pool.query(
+      `INSERT INTO store_approval_history (store_id, action, from_status, to_status, actor, note)
+       VALUES ($1, 'REQUEST_INFO', NULL, 'more_info_required', $2, $3)`,
+      [id, actor, note]
+    );
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/* __DRIVER_KYC_ADMIN_BLOCK__ */
+const svcKyc = require('../services/verificationService');
+
+// Queue
+router.get('/driver-applications', async (req, res) => {
+  const status = String(req.query.status || 'pending');
+  try {
+    const { rows } = await pool.query(`
+      SELECT d.id, d.user_id, d.full_legal_name, d.email,
+             d.vehicle_type, d.vehicle_number,
+             d.verification_status, d.risk_state,
+             d.submitted_at, d.approved_at, d.approved_by,
+             (SELECT COUNT(*)::int FROM driver_documents WHERE driver_id=d.id) AS doc_count,
+             (SELECT COUNT(*)::int FROM driver_documents WHERE driver_id=d.id AND status='pending') AS pending_docs
+        FROM delivery_partners d
+       WHERE ($1 = 'all' OR d.verification_status = $1)
+       ORDER BY d.submitted_at DESC NULLS LAST, d.id DESC
+       LIMIT 200`, [status]);
+    return res.json({ success: true, drivers: rows });
+  } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Detail
+router.get('/driver-applications/:id', async (req, res) => {
+  try {
+    const d = await svcKyc.getDriverVerification(Number(req.params.id));
+    if (!d) return res.status(404).json({ success: false, message: 'Not found' });
+    const { rows: history } = await pool.query(
+      `SELECT actor_type, actor_id, action, from_state, to_state, note, created_at
+         FROM verification_audit_logs
+        WHERE subject_type='DRIVER' AND subject_id=$1
+        ORDER BY id DESC LIMIT 50`, [Number(req.params.id)]);
+    return res.json({ success: true, ...d, history });
+  } catch (e) { return res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Actions
+router.post('/driver-applications/:id/approve', async (req, res) => {
+  try {
+    const r = await svcKyc.adminDecision(Number(req.params.id), 'approve', (req.body && req.body.actor) || 'admin', (req.body && req.body.note) || null);
+    return res.json({ success: true, ...r });
+  } catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+});
+router.post('/driver-applications/:id/reject', async (req, res) => {
+  try {
+    const reason = (req.body && req.body.reason) || '';
+    if (!reason) return res.status(400).json({ success: false, message: 'reason required' });
+    const r = await svcKyc.adminDecision(Number(req.params.id), 'reject', (req.body && req.body.actor) || 'admin', reason);
+    return res.json({ success: true, ...r });
+  } catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+});
+router.post('/driver-applications/:id/request-info', async (req, res) => {
+  try {
+    const note = (req.body && req.body.note) || '';
+    if (!note) return res.status(400).json({ success: false, message: 'note required' });
+    const r = await svcKyc.adminDecision(Number(req.params.id), 'request-info', (req.body && req.body.actor) || 'admin', note);
+    return res.json({ success: true, ...r });
+  } catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+});
+router.post('/driver-applications/:id/suspend', async (req, res) => {
+  try {
+    const r = await svcKyc.adminDecision(Number(req.params.id), 'suspend', (req.body && req.body.actor) || 'admin', (req.body && req.body.reason) || null);
+    return res.json({ success: true, ...r });
+  } catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+});
+router.post('/driver-applications/:id/unsuspend', async (req, res) => {
+  try {
+    const r = await svcKyc.adminDecision(Number(req.params.id), 'unsuspend', (req.body && req.body.actor) || 'admin', null);
+    return res.json({ success: true, ...r });
+  } catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+});
+
+// Per-document review
+router.post('/driver-documents/:docId/approve', async (req, res) => {
+  try {
+    const r = await svcKyc.docDecision(Number(req.params.docId), 'approve', (req.body && req.body.actor) || 'admin', null);
+    return res.json({ success: true, ...r });
+  } catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+});
+router.post('/driver-documents/:docId/reject', async (req, res) => {
+  try {
+    const reason = (req.body && req.body.reason) || '';
+    if (!reason) return res.status(400).json({ success: false, message: 'reason required' });
+    const r = await svcKyc.docDecision(Number(req.params.docId), 'reject', (req.body && req.body.actor) || 'admin', reason);
+    return res.json({ success: true, ...r });
+  } catch (e) { return res.status(400).json({ success: false, error: e.message }); }
+});
+
+/* __DRIVE_STREAM_BLOCK__ */
+const driveSvc = require('../services/googleDrive');
+
+router.get('/drive/:fileId/stream', async (req, res) => {
+  try {
+    const out = await driveSvc.getFileStream(req.params.fileId);
+    res.setHeader('Content-Type', out.mimeType || 'application/octet-stream');
+    if (out.size) res.setHeader('Content-Length', out.size);
+    res.setHeader('Content-Disposition', 'inline; filename="' + (out.name || 'file') + '"');
+    out.stream.pipe(res);
+  } catch (e) {
+    console.error('[admin drive stream] error:', e.message);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+
 module.exports = router;

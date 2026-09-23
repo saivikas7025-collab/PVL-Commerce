@@ -6,6 +6,8 @@
  * cart â€” never from the client body.
  */
 const express = require('express');
+const pricingEngine = require('../services/pricingEngine');
+const dispatchEngine = require('../services/dispatchEngine');
 const { pool } = require('../db');
 const { authenticate } = require('../middleware/auth');
 
@@ -269,14 +271,34 @@ router.post('/', authenticate, async (req, res) => {
       }
     }
 
-    // Server calculates totals from server prices.
-    const subtotal = cartRows.reduce(
-      (sum, r) => sum + Number(r.server_price) * Number(r.quantity),
-      0
-    );
-    const deliveryFee = DEFAULT_DELIVERY_FEE;
-    const discount = 0;
-    const totalAmount = Math.max(0, subtotal + deliveryFee - discount);
+    // ============================================================
+    // CENTRALIZED PRICING ENGINE - all money math happens here.
+    // Never trusts a value from the client.
+    // ============================================================
+    const checkoutItems = cartRows.map(r => ({
+      product_id: Number(r.product_id),
+      store_id: Number(r.store_id ?? r.product_store_id ?? r.sid) || null,
+      quantity: Number(r.quantity),
+    }));
+
+    let pricing;
+    try {
+      pricing = await pricingEngine.calculateCheckout({
+        customer_id: req.userId,
+        address_id: addressId,
+        items: checkoutItems,
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: e.message || 'Pricing failed' });
+    }
+
+    const subtotal = pricing.pricing.items_total;
+    const deliveryFee = pricing.pricing.delivery_charge;
+    const discount = pricing.pricing.coupon_discount;
+    const totalAmount = pricing.pricing.grand_total;
+
+    console.log('[orders] pricing: subtotal=' + subtotal + ' delivery=' + deliveryFee + ' discount=' + discount + ' total=' + totalAmount);
 
     // For the MVP the platform is single-store, so use store 1 by default.
     // In a real multi-store setup you'd derive this from products.store_id
@@ -326,6 +348,33 @@ router.post('/', authenticate, async (req, res) => {
       );
     }
 
+    // Save immutable price snapshot for this order
+    await client.query(
+      `INSERT INTO order_price_breakdown (
+         order_id, mrp_total, product_discount, items_total,
+         handling_charge, delivery_charge, platform_fee,
+         coupon_code, coupon_discount, tax, total_savings, grand_total,
+         distance_km, snapshot_json
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (order_id) DO NOTHING`,
+      [
+        order.id,
+        pricing.pricing.mrp_total,
+        pricing.pricing.product_discount,
+        pricing.pricing.items_total,
+        pricing.pricing.handling_charge,
+        pricing.pricing.delivery_charge,
+        pricing.pricing.platform_fee,
+        pricing.coupon.code || null,
+        pricing.pricing.coupon_discount,
+        pricing.pricing.tax,
+        pricing.pricing.total_savings,
+        pricing.pricing.grand_total,
+        pricing.delivery.distance_km,
+        JSON.stringify({ pricing: pricing.pricing, delivery: pricing.delivery, coupon: pricing.coupon, items: pricing.items }),
+      ]
+    );
+
     await client.query(
       `INSERT INTO order_status_history (order_id, status, note)
        VALUES ($1, 'pending', $2)`,
@@ -354,6 +403,15 @@ router.post('/', authenticate, async (req, res) => {
 
     await client.query('COMMIT');
 
+    // Auto-dispatch now that the order is committed and the snapshot is saved
+    try {
+      require('../services/dispatchEngine').dispatchOrder(order.id).catch(err =>
+        console.error('[auto-dispatch] order', order.id, 'failed:', err.message)
+      );
+    } catch (e) {
+      console.error('[auto-dispatch] trigger failed:', e.message);
+    }
+
     // For COD we consider the order confirmed the moment it's placed â€”
     // the store will accept from its dashboard. The customer app will
     // show the confirmation screen with this order object.
@@ -367,6 +425,9 @@ router.post('/', authenticate, async (req, res) => {
       success: true,
       message: 'Order created successfully',
       order,
+      pricing: pricing.pricing,
+      delivery: pricing.delivery,
+      coupon: pricing.coupon,
       requires_payment: paymentMethod !== 'COD',
     });
   } catch (error) {

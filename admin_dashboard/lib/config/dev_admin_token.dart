@@ -1,0 +1,2 @@
+// AUTO-GENERATED.
+const String kDevAdminToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInJvbGUiOiJhZG1pbiIsImlhdCI6MTc5MDA0NTg5MSwiZXhwIjoxNzkwMDUzMDkxfQ.V3MBxsFsw5xoMN6oRQunbXTjWayYYgwnDKMo3GmQstw';

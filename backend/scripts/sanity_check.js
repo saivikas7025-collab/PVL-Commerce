@@ -1,0 +1,11 @@
+﻿const fs = require('fs');
+const s = fs.readFileSync('routes/storeDashboard.js', 'utf8');
+const i = s.indexOf('router.post("/register"');
+console.log('--- storeDashboard /register head ---');
+console.log(i === -1 ? 'NOT FOUND' : s.slice(i, i + 260));
+console.log('');
+const a = fs.readFileSync('routes/admin.js', 'utf8');
+console.log('--- admin.js ---');
+console.log('store-applications occurrences:', (a.match(/store-applications/g) || []).length);
+console.log('module.exports present:', a.includes('module.exports = router'));
+console.log('admin.js total length:', a.length);

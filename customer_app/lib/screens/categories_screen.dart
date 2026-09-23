@@ -1,15 +1,14 @@
-import 'package:flutter/material.dart';
-import '../models/category.dart';
-import '../models/product.dart';
+﻿import 'package:flutter/material.dart';
+import '../models/section.dart';
 import '../services/category_service.dart';
-import '../services/product_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
-import '../widgets/product_card.dart';
+import 'section_screen.dart';
 
+/// Categories tab — shows the 20 top-level sections.
+/// Subcategories never appear here; they live inside SectionScreen.
 class CategoriesScreen extends StatefulWidget {
   final int? initialCategory;
-
   const CategoriesScreen({super.key, this.initialCategory});
 
   @override
@@ -17,9 +16,7 @@ class CategoriesScreen extends StatefulWidget {
 }
 
 class _CategoriesScreenState extends State<CategoriesScreen> {
-  List<Category> _categories = [];
-  List<Product> _products = [];
-  int? _selectedCategoryId;
+  List<Section> _sections = [];
   bool _loading = true;
   String? _error;
   String _query = '';
@@ -27,48 +24,38 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedCategoryId = widget.initialCategory;
-    _loadData();
+    _load();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final result = await Future.wait([
-        CategoryService.getCategories(),
-        ProductService.getProducts(),
-      ]);
+      final list = await CategoryService.getSections();
       if (!mounted) return;
-      final categories = result[0] as List<Category>;
       setState(() {
-        _categories = categories;
-        _products = result[1] as List<Product>;
-        _selectedCategoryId ??= categories.isEmpty ? null : categories.first.id;
+        _sections = list;
         _loading = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'We couldn’t load categories right now.';
+        _error = "We couldn't load categories right now.";
       });
     }
   }
 
-  List<Product> get _filteredProducts {
-    final query = _query.trim().toLowerCase();
-    return _products.where((product) {
-      final matchesCategory = _selectedCategoryId == null ||
-          product.categoryId == _selectedCategoryId;
-      final matchesQuery = query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.unit.toLowerCase().contains(query);
-      return matchesCategory && matchesQuery;
-    }).toList();
+  List<Section> get _shown {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return _sections;
+    return _sections.where((s) => s.name.toLowerCase().contains(q)).toList();
   }
+
+  int get _totalItems =>
+      _sections.fold<int>(0, (n, s) => n + s.productCount);
 
   @override
   Widget build(BuildContext context) {
@@ -76,140 +63,85 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (_error != null) {
-      return Scaffold(body: AppErrorState(message: _error!, onRetry: _loadData));
+      return Scaffold(body: AppErrorState(message: _error!, onRetry: _load));
     }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Browse categories')),
       body: RefreshIndicator(
-        onRefresh: _loadData,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
-            return wide ? _wideLayout() : _mobileLayout();
-          },
+        onRefresh: _load,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(child: _searchField()),
+            SliverToBoxAdapter(child: _allProductsTile()),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.md),
+              sliver: SliverToBoxAdapter(
+                child: SectionHeading(title: 'Shop by section'),
+              ),
+            ),
+            _sectionsGrid(),
+            const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xxl)),
+          ],
         ),
       ),
     );
   }
 
-  Widget _mobileLayout() {
-    return CustomScrollView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      slivers: [
-        SliverToBoxAdapter(child: _searchField()),
-        SliverToBoxAdapter(child: _categoryRail(horizontal: true)),
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.md),
-            child: SectionHeading(title: _selectedName),
-          ),
-        ),
-        _productGridSliver(),
-        const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xxl)),
-      ],
-    );
-  }
-
-  Widget _wideLayout() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(width: 240, child: _categoryRail(horizontal: false)),
-        Expanded(
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(child: _searchField()),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.md),
-                  child: SectionHeading(title: _selectedName),
-                ),
-              ),
-              _productGridSliver(),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  String get _selectedName {
-    for (final category in _categories) {
-      if (category.id == _selectedCategoryId) return category.name;
-    }
-    return 'All products';
-  }
-
   Widget _searchField() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 0),
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 0),
       child: TextField(
-        onChanged: (value) => setState(() => _query = value),
+        onChanged: (v) => setState(() => _query = v),
         decoration: const InputDecoration(
-          hintText: 'Search within groceries',
+          hintText: 'Search categories',
           prefixIcon: Icon(Icons.search_rounded),
         ),
       ),
     );
   }
 
-  Widget _categoryRail({required bool horizontal}) {
-    final children = [
-      _categoryTile(null, 'All products', _products.length),
-      ..._categories.map(
-        (category) => _categoryTile(
-          category.id,
-          category.name,
-          _products.where((p) => p.categoryId == category.id).length,
-        ),
-      ),
-    ];
-
-    if (horizontal) {
-      return SizedBox(
-        height: 108,
-        child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, 0),
-          scrollDirection: Axis.horizontal,
-          itemCount: children.length,
-          separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.sm),
-          itemBuilder: (_, index) => children[index],
-        ),
-      );
-    }
-
-    return ListView(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      children: children,
-    );
-  }
-
-  Widget _categoryTile(int? id, String name, int count) {
-    final selected = id == _selectedCategoryId ||
-        (id == null && _selectedCategoryId == null);
-    return SizedBox(
-      width: 120,
+  Widget _allProductsTile() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, 0),
       child: Material(
-        color: selected ? AppColors.brandSoft : Colors.white,
-        borderRadius: BorderRadius.circular(AppRadius.md),
+        color: AppColors.brandSoft,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
         child: InkWell(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          onTap: () => setState(() => _selectedCategoryId = id),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const SectionScreen(sectionName: 'All products'),
+            ),
+          ),
           child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            child: Row(
               children: [
-                Icon(
-                  _iconForCategory(name),
-                  color: selected ? AppColors.brandDark : AppColors.inkMuted,
+                const Icon(Icons.storefront_rounded,
+                    color: AppColors.brandDark, size: 30),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('All products',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 15)),
+                      const SizedBox(height: 2),
+                      Text('$_totalItems items across all sections',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.inkMuted)),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                const SizedBox(height: AppSpacing.xs),
-                Text('$count items', style: const TextStyle(fontSize: 10, color: AppColors.inkMuted)),
+                const Icon(Icons.chevron_right_rounded,
+                    color: AppColors.brandDark),
               ],
             ),
           ),
@@ -218,48 +150,110 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     );
   }
 
-  Widget _productGridSliver() {
-    if (_filteredProducts.isEmpty) {
+  Widget _sectionsGrid() {
+    final list = _shown;
+    if (list.isEmpty) {
       return const SliverFillRemaining(
         hasScrollBody: false,
         child: AppEmptyState(
           icon: Icons.search_off_rounded,
-          title: 'No products found',
-          message: 'Try another category or search term.',
+          title: 'No categories found',
+          message: 'Try another search term.',
         ),
       );
     }
-    return SliverLayoutBuilder(
-      builder: (context, constraints) {
-        final count = constraints.crossAxisExtent >= 1000
-            ? 4
-            : constraints.crossAxisExtent >= 650
-                ? 3
-                : 2;
-        return SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-          sliver: SliverGrid.builder(
+    return SliverPadding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      sliver: SliverLayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.crossAxisExtent;
+          final cols = w >= 1100
+              ? 6
+              : w >= 800
+                  ? 5
+                  : w >= 500
+                      ? 4
+                      : 3;
+          return SliverGrid.builder(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: count,
+              crossAxisCount: cols,
               crossAxisSpacing: AppSpacing.md,
               mainAxisSpacing: AppSpacing.md,
-              childAspectRatio: 0.68,
+              childAspectRatio: 0.78,
             ),
-            itemCount: _filteredProducts.length,
-            itemBuilder: (_, index) => ProductCard(product: _filteredProducts[index]),
-          ),
-        );
-      },
+            itemCount: list.length,
+            itemBuilder: (_, i) => _SectionTile(section: list[i]),
+          );
+        },
+      ),
     );
   }
+}
 
-  IconData _iconForCategory(String name) {
-    final value = name.toLowerCase();
-    if (value.contains('fruit') || value.contains('vegetable')) return Icons.eco_outlined;
-    if (value.contains('dairy') || value.contains('breakfast')) return Icons.breakfast_dining_outlined;
-    if (value.contains('snack') || value.contains('drink')) return Icons.local_cafe_outlined;
-    if (value.contains('beauty') || value.contains('personal')) return Icons.spa_outlined;
-    if (value.contains('house')) return Icons.cleaning_services_outlined;
-    return Icons.category_outlined;
+class _SectionTile extends StatelessWidget {
+  final Section section;
+  const _SectionTile({required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => SectionScreen(sectionName: section.name),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: section.bgColor,
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Text(
+                    section.icon,
+                    style: const TextStyle(
+                      fontSize: 30,
+                      height: 1.0,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Flexible(
+                child: Text(
+                  section.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.2,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '${section.productCount} items',
+                style: const TextStyle(
+                    fontSize: 10, color: AppColors.inkMuted),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

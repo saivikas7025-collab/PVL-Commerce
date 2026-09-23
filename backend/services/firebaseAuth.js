@@ -1,37 +1,51 @@
-﻿/**
- * Firebase Admin verification helper.
- * Reads FIREBASE_SERVICE_ACCOUNT_B64 (base64 of the service account JSON)
- * and exposes verifyIdToken() used by the store + customer Google routes.
+/**
+ * Firebase Admin verification helper — firebase-admin v14 modular API.
+ * Reads FIREBASE_SERVICE_ACCOUNT_B64 (base64 of the service account JSON).
  */
-let admin = null;
+const { initializeApp, cert, getApps } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
+
 let initialized = false;
 
 function initFirebase() {
-  if (initialized) return admin;
-  try {
-    admin = require('firebase-admin');
-  } catch (e) {
-    throw new Error('firebase-admin not installed');
-  }
+  if (initialized) return;
+
   const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_B64;
   if (!b64 || !b64.trim()) {
     throw new Error('FIREBASE_SERVICE_ACCOUNT_B64 not configured on the server');
   }
+
   const json = Buffer.from(b64, 'base64').toString('utf8');
-  const creds = JSON.parse(json);
-  if (!admin.apps.length) {
-    admin.initializeApp({ credential: admin.credential.cert(creds) });
+  let creds;
+  try {
+    creds = JSON.parse(json);
+  } catch (e) {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT_B64 is not valid JSON: ' + e.message);
   }
+
+  // Normalize private key newlines
+  if (creds.private_key && typeof creds.private_key === 'string') {
+    creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+  }
+
+  if (!getApps().length) {
+    initializeApp({
+      credential: cert(creds),
+      projectId: creds.project_id,
+    });
+  }
+
   initialized = true;
-  return admin;
 }
 
 async function verifyIdToken(idToken) {
+  if (!idToken || typeof idToken !== 'string') throw new Error('Missing or invalid idToken');
+
   if (!idToken || typeof idToken !== 'string') {
     throw new Error('Missing idToken');
   }
-  const app = initFirebase();
-  const decoded = await app.auth().verifyIdToken(idToken);
+  initFirebase();
+  const decoded = await getAuth().verifyIdToken(idToken);
   return {
     uid: decoded.uid,
     email: decoded.email || null,

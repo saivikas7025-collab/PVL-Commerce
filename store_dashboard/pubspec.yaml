@@ -1,4 +1,4 @@
-name: store_dashboard
+﻿name: store_dashboard
 description: "PVL Commerce Store Dashboard"
 publish_to: 'none'
 
@@ -10,29 +10,29 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
   cupertino_icons: ^1.0.8
-  webview_flutter: ^4.14.1
   http: ^1.6.0
-  audioplayers: ^6.8.1
   socket_io_client: ^3.1.6
+  webview_flutter: ^4.14.1
+  audioplayers: ^6.8.1
   geolocator: ^14.0.3
   firebase_core: ^4.14.0
   firebase_auth: ^6.6.1
   google_sign_in: 6.3.0
+  mobile_scanner: ^5.2.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
-
   assets:
     - assets/index.html
+    - assets/images/
+
 flutter_launcher_icons:
   android: true
   ios: false

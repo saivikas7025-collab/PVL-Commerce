@@ -1,4 +1,4 @@
-﻿/// Google Sign-In service.
+/// Google Sign-In service.
 ///
 /// Flow:
 ///   1. Firebase Auth (web: signInWithPopup, mobile: GoogleSignIn + credential)
@@ -71,7 +71,7 @@ class GoogleAuthService {
     }
 
     // Mobile: Google Sign-In plugin -> Firebase credential.
-    final googleUser = await GoogleSignIn().signIn();
+    final googleUser = await GoogleSignIn(serverClientId: '955031514909-jq41c9qti9bmnrna9i2fal9n060u4mps.apps.googleusercontent.com').signIn();
     if (googleUser == null) {
       throw Exception('Google sign-in was cancelled');
     }
@@ -91,7 +91,7 @@ class GoogleAuthService {
 
   static Future<void> signOut() async {
     try {
-      await GoogleSignIn().signOut();
+      await GoogleSignIn(serverClientId: '955031514909-jq41c9qti9bmnrna9i2fal9n060u4mps.apps.googleusercontent.com').signOut();
     } catch (_) {}
     try {
       await FirebaseAuth.instance.signOut();

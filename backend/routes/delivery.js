@@ -1257,14 +1257,30 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Create a users row (used as the profile holder)
-    const userRes = await pool.query(
-      `INSERT INTO users (name, phone, email, role, created_at)
-       VALUES ($1, $2, $3, 'delivery_partner', CURRENT_TIMESTAMP)
-       RETURNING id`,
-      [String(name || decoded.name || 'Partner').slice(0, 120), String(phone || '').slice(0, 20), gEmail]
+    // Reuse existing users row if the email already exists (customer/store/driver/etc.)
+    let userId = null;
+    const existingUser = await pool.query(
+      `SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1`,
+      [gEmail]
     );
-    const userId = userRes.rows[0].id;
+    if (existingUser.rows.length > 0) {
+      userId = existingUser.rows[0].id;
+      // Refresh name only — phone/email are unique across users
+      await pool.query(
+        `UPDATE users SET name = COALESCE(NULLIF($1,''), name) WHERE id = $2`,
+        [String(name || '').slice(0, 120), userId]
+      );
+      console.log('[driver register] reusing existing users.id =', userId, 'for', gEmail);
+    } else {
+      const userRes = await pool.query(
+        `INSERT INTO users (name, phone, email, role, created_at)
+         VALUES ($1, $2, $3, 'delivery_partner', CURRENT_TIMESTAMP)
+         RETURNING id`,
+        [String(name || decoded.name || 'Partner').slice(0, 120), String(phone || '').slice(0, 20), gEmail]
+      );
+      userId = userRes.rows[0].id;
+      console.log('[driver register] created new users.id =', userId, 'for', gEmail);
+    }
 
     const pRes = await pool.query(
       `INSERT INTO delivery_partners
@@ -1273,6 +1289,16 @@ router.post('/register', async (req, res) => {
        RETURNING id, approval_status`,
       [userId, String(vehicle_type || 'Bike').slice(0, 30), String(vehicle_number || '').slice(0, 20), decoded.uid]
     );
+
+    // Create the KYC verification row for this driver
+    try {
+      await pool.query(
+        `INSERT INTO driver_verifications (driver_id) VALUES ($1) ON CONFLICT (driver_id) DO NOTHING`,
+        [pRes.rows[0].id]
+      );
+    } catch (e) {
+      console.error('[driver register] driver_verifications insert failed:', e.message);
+    }
 
     return res.json({
       success: true, pending: true,
@@ -1337,7 +1363,7 @@ router.post('/google', async (req, res) => {
       partner: { id: partner.id, name: partner.name, phone: partner.phone, email: partner.email },
     });
   } catch (e) {
-    console.error('Driver google auth error:', e.message);
+    console.error('Driver google auth error:', e.message, e.stack);
     res.status(401).json({ success: false, message: e.message || 'Google verification failed' });
   }
 });

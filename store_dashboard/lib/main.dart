@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'screens/store_order_inbox_screen.dart';
 import 'config/api_config.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
@@ -11,6 +12,8 @@ import 'firebase_options.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'screens/pos_screen.dart';
+import 'widgets/pvl_logo.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -91,7 +94,10 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _signInWithGoogle() async {
     setState(() { _googleLoading = true; _error = ''; });
     try {
-      final googleUser = await GoogleSignIn().signIn();
+      final googleUser = await GoogleSignIn(
+        clientId: '955031514909-jq41c9qti9bmnrna9i2fal9n060u4mps.apps.googleusercontent.com',
+        scopes: ['email', 'profile'],
+      ).signIn();
       if (googleUser == null) { return; }
       final googleAuth = await googleUser.authentication;
       final credential = FA.GoogleAuthProvider.credential(
@@ -309,7 +315,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_storeName),
+        title: const PvlLogo(size: 32, showWordmark: true),
         actions: [
           IconButton(
             icon: const Icon(Icons.notifications_outlined),
@@ -328,6 +334,35 @@ class _DashboardPageState extends State<DashboardPage> {
       body: IndexedStack(
         index: _currentIndex,
         children: _tabs,
+      ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'inbox',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StoreOrderInboxScreen(storeId: 1))),
+            icon: const Icon(Icons.inbox),
+            label: const Text('Inbox'),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton.extended(
+        heroTag: 'pos-fab',
+        onPressed: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => PosScreen(
+                storeId: widget.storeId,
+                baseUrl: '${ApiConfig.baseUrl}/store',
+              ),
+            ),
+          );
+        },
+        backgroundColor: const Color(0xFF1B5E20),
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add_shopping_cart),
+        label: const Text('New Sale'),
+      ),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
@@ -2141,3 +2176,6 @@ class PendingApprovalScreen extends StatelessWidget {
     );
   }
 }
+
+
+

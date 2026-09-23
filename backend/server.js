@@ -31,7 +31,15 @@ const storeRoutes = require('./routes/store');
 const storeDashboardRoutes = require('./routes/storeDashboard');
 const deliveryRoutes = require('./routes/delivery');
 const adminRoutes = require('./routes/admin');
+const dispatchRoutes = require('./routes/dispatch');
+const driverKycRoutes = require('./routes/driverKyc');
+const uploadRoutes = require('./routes/uploads');
+const checkoutRoutes = require('./routes/checkout');
+const { startDispatchTicker } = require('./services/dispatchTicker');
 const { authenticate } = require('./middleware/auth');
+
+const sectionsRouter = require('./routes/sections');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -121,9 +129,15 @@ function requireAdmin(req, res, next) {
   next();
 }
 app.use('/api/admin', authenticate, requireAdmin, adminRoutes);
+app.use('/api/dispatch', dispatchRoutes);
+app.use('/api/driver-kyc', driverKycRoutes);
+app.use('/api/uploads', uploadRoutes);
+app.use('/api/checkout', checkoutRoutes);
 
 // legacy /api/store... some helpers still live here
 app.use('/api/store-legacy', storeRoutes);
+
+app.use('/api', sectionsRouter);
 
 // ---- HTTP + Socket.IO --------------------------------------
 const httpServer = http.createServer(app);
@@ -276,6 +290,9 @@ app.get('/api/live-location/:orderId', (req, res) => {
 });
 
 // ---- start server ------------------------------------------
+/* __TICKER_STARTED__ */
+try { startDispatchTicker(15000); } catch (e) { console.error('[dispatch] ticker start failed:', e.message); }
+
 httpServer.listen(PORT, async () => {
   console.log(
     `PVL-Commerce backend running on port ${PORT}`
@@ -285,3 +302,4 @@ httpServer.listen(PORT, async () => {
 
   await testDatabaseConnection();
 });
+

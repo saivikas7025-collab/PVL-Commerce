@@ -1,0 +1,100 @@
+/// Google Sign-In service.
+///
+/// Flow:
+///   1. Firebase Auth (web: signInWithPopup, mobile: GoogleSignIn + credential)
+///   2. Obtain Firebase ID token
+///   3. POST idToken to our backend /api/auth/google
+///   4. Save the backend-issued JWT locally
+import 'dart:convert';
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
+
+import '../config/api_config.dart';
+import 'auth_service.dart';
+
+class GoogleAuthService {
+  static Future<void> signInWithGoogle() async {
+    // 1) Get Firebase ID token
+    final idToken = await _getFirebaseIdToken();
+
+    // 2) Exchange with our backend
+    final url = Uri.parse('${ApiConfig.baseUrl}/auth/google');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'idToken': idToken}),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      String message = 'Google sign-in failed';
+      try {
+        final body = jsonDecode(response.body);
+        if (body is Map && body['message'] != null) {
+          message = body['message'].toString();
+        }
+      } catch (_) {}
+      throw Exception(message);
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (data['success'] != true) {
+      throw Exception(data['message']?.toString() ?? 'Google sign-in failed');
+    }
+
+    // 3) Save token + user id
+    final token = data['token']?.toString();
+    if (token == null || token.isEmpty) {
+      throw Exception('Backend did not return a token');
+    }
+    await AuthService.saveToken(token);
+
+    final user = data['user'];
+    if (user is Map && user['id'] != null) {
+      await AuthService.saveUserId(user['id']);
+    }
+  }
+
+  static Future<String> _getFirebaseIdToken() async {
+    if (kIsWeb) {
+      // Web: Firebase handles the Google popup directly.
+      final provider = GoogleAuthProvider();
+      final userCred =
+          await FirebaseAuth.instance.signInWithPopup(provider);
+      final user = userCred.user;
+      if (user == null) throw Exception('Google sign-in was cancelled');
+      final idToken = await user.getIdToken();
+      if (idToken == null) throw Exception('Could not get Firebase ID token');
+      return idToken;
+    }
+
+    // Mobile: Google Sign-In plugin -> Firebase credential.
+    final googleUser = await GoogleSignIn().signIn();
+    if (googleUser == null) {
+      throw Exception('Google sign-in was cancelled');
+    }
+    final googleAuth = await googleUser.authentication;
+    final credential = GoogleAuthProvider.credential(
+      accessToken: googleAuth.accessToken,
+      idToken: googleAuth.idToken,
+    );
+    final userCred =
+        await FirebaseAuth.instance.signInWithCredential(credential);
+    final user = userCred.user;
+    if (user == null) throw Exception('Firebase sign-in failed');
+    final idToken = await user.getIdToken();
+    if (idToken == null) throw Exception('Could not get Firebase ID token');
+    return idToken;
+  }
+
+  static Future<void> signOut() async {
+    try {
+      await GoogleSignIn().signOut();
+    } catch (_) {}
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (_) {}
+  }
+}

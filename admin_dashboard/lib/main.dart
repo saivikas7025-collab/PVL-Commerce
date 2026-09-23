@@ -8,6 +8,9 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'firebase_options.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'config/api_config.dart';
+import 'screens/store_applications_screen.dart';
+import 'screens/dispatch_board_screen.dart';
+import 'screens/driver_applications_screen.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -539,20 +542,83 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _buildDashboard(),
                 _buildLiveTracking(),
                 _buildOrders(),
-                _buildFeedback(),
+                _comingSoon('Feedback', Icons.feedback_outlined, 'Order feedback and ratings from customers will appear here once live orders are delivered.'),
                 _buildStoreApprovals(),
-                _buildStores(),
-                _buildDrivers(),
+                const StoreApplicationsScreen(),
+                const DriverApplicationsScreen(),
                 _buildFinance(),
               ],
             ),
           ),
         ],
       ),
-    );
+    
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+
+          FloatingActionButton.extended(
+            heroTag: 'driver-kyc',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DriverApplicationsScreen())),
+            icon: const Icon(Icons.verified_user),
+            label: const Text('Driver KYC'),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton.extended(
+            heroTag: 'dispatch',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DispatchBoardScreen())),
+            icon: const Icon(Icons.alt_route),
+            label: const Text('Dispatch'),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton.extended(
+            heroTag: 'stores',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StoreApplicationsScreen())),
+            icon: const Icon(Icons.store),
+            label: const Text('Stores'),
+          ),
+        ],
+      ),
+     );
+
   }
 
   // ---------- Dashboard ----------
+  Widget _comingSoon(String title, IconData icon, String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 72, color: Colors.blueGrey.shade300),
+            const SizedBox(height: 20),
+            Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, color: Colors.black54),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
+              ),
+              child: const Text('Coming soon', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.w600, fontSize: 12)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildDashboard() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error.isNotEmpty) return _errorWidget(_error);

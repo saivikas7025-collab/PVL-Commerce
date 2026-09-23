@@ -4,542 +4,806 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
-import '../services/auth_service.dart';
-import '../theme/app_theme.dart';
+import '../theme/pvl_design.dart';
+import '../widgets/premium_marker.dart';
 
-/// Full-screen live tracking of the delivery partner + store + destination.
+/// Premium live order tracking screen — Swiggy/Zomato/Blinkit-inspired.
 class LiveTrackingScreen extends StatefulWidget {
   final int orderId;
-  final double? storeLat;
-  final double? storeLng;
-  final double? destLat;
-  final double? destLng;
+  final LatLng? initialCustomer;
+  final LatLng? initialStore;
 
   const LiveTrackingScreen({
     super.key,
     required this.orderId,
-    this.storeLat,
-    this.storeLng,
-    this.destLat,
-    this.destLng,
+    this.initialCustomer,
+    this.initialStore,
   });
+
+  static void show(BuildContext context, int orderId, {LatLng? customer, LatLng? store}) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => LiveTrackingScreen(
+        orderId: orderId,
+        initialCustomer: customer,
+        initialStore: store,
+      ),
+    ));
+  }
 
   @override
   State<LiveTrackingScreen> createState() => _LiveTrackingScreenState();
 }
 
-class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
+enum DeliveryState {
+  orderPlaced, orderConfirmed, storeAccepted, preparing, readyForPickup,
+  driverAssigned, driverArrivedStore, pickedUp, onTheWay,
+  nearDestination, delivered, cancelled,
+}
+
+class _LiveTrackingScreenState extends State<LiveTrackingScreen> with TickerProviderStateMixin {
+  // ------- Map -------
+  final MapController _map = MapController();
+  late final AnimationController _markerCtrl;
+  late final AnimationController _cameraCtrl;
+
+  // ------- State -------
+  LatLng? _storePos;
+  LatLng? _customerPos;
+  LatLng _driverPos = const LatLng(17.3850, 78.4867);
+  LatLng _driverFrom = const LatLng(17.3850, 78.4867);
+  LatLng _driverTo = const LatLng(17.3850, 78.4867);
+  double _heading = 0;
+  double _headingFrom = 0;
+  double _headingTo = 0;
+
+  DeliveryState _state = DeliveryState.orderConfirmed;
+  int _etaMinutes = 18;
+  String _driverName = 'Rahul Kumar';
+  double _driverRating = 4.8;
+  String _driverVehicle = 'Bike • TS 09 AB 1234';
+
+  // ------- Socket -------
   IO.Socket? _socket;
+  bool _connected = false;
   Timer? _pollTimer;
+  Timer? _mockMover;
 
-  LatLng? _driverLatLng;
-  LatLng? _storeLatLng;
-  LatLng? _destLatLng;
+  // ------- Camera mode -------
+  bool _autoFollow = true;
 
-  String _status = 'connecting';
-  String? _driverName;
-  String? _driverPhone;
-  DateTime? _lastUpdate;
-  bool _loading = true;
-  String? _error;
+  // Status timeline definition — 6 visible steps
+  static const List<DeliveryState> _timeline = [
+    DeliveryState.orderConfirmed,
+    DeliveryState.preparing,
+    DeliveryState.pickedUp,
+    DeliveryState.onTheWay,
+    DeliveryState.nearDestination,
+    DeliveryState.delivered,
+  ];
 
   @override
   void initState() {
     super.initState();
-    // Fallback Hyderabad coords if nothing is provided
-    _storeLatLng = widget.storeLat != null && widget.storeLng != null
-        ? LatLng(widget.storeLat!, widget.storeLng!)
-        : const LatLng(17.3850, 78.4867);
-    _destLatLng = widget.destLat != null && widget.destLng != null
-        ? LatLng(widget.destLat!, widget.destLng!)
-        : const LatLng(17.4000, 78.5000);
 
-    _loadInitialLocation();
+    // Defaults: fall back to Hyderabad coords so map always has something
+    _storePos = widget.initialStore ?? const LatLng(17.4483, 78.3915);
+    _customerPos = widget.initialCustomer ?? const LatLng(17.4239, 78.4738);
+    _driverPos = _storePos!;
+    _driverFrom = _storePos!;
+    _driverTo = _storePos!;
+
+    _markerCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
+      ..addListener(_onMarkerTick);
+    _cameraCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+
     _connectSocket();
-    _startPolling();
+    _startMockMotion(); // remove once backend streams real locations
   }
 
   @override
   void dispose() {
+    _markerCtrl.dispose();
+    _cameraCtrl.dispose();
     _pollTimer?.cancel();
-    _socket?.dispose();
+    _mockMover?.cancel();
+    try { _socket?.disconnect(); _socket?.dispose(); } catch (_) {}
     super.dispose();
   }
 
-  /// Poll every 8s so the marker keeps moving even if Socket.IO drops.
-  void _startPolling() {
-    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
-      _fetchLocationFromHttp();
-    });
-  }
-
-  Future<void> _loadInitialLocation() async {
-    await _fetchLocationFromHttp();
-    if (mounted) setState(() => _loading = false);
-  }
-
-  Future<void> _fetchLocationFromHttp() async {
+  // ============================================================
+  //  Socket.IO
+  // ============================================================
+  void _connectSocket() {
     try {
-      final token = await AuthService.getToken();
-      final url = '${ApiConfig.baseUrl}/orders/${widget.orderId}';
-      final res = await _httpGet(url, token);
-      final data = jsonDecode(res);
-      final order = (data is Map && data['order'] is Map)
-          ? Map<String, dynamic>.from(data['order'])
-          : (data is Map ? Map<String, dynamic>.from(data) : null);
-      if (order == null) return;
-
-      // Driver location (may be in different fields)
-      final dLat = _num(order['driver_latitude'] ??
-          order['delivery_latitude'] ??
-          order['current_latitude']);
-      final dLng = _num(order['driver_longitude'] ??
-          order['delivery_longitude'] ??
-          order['current_longitude']);
-
-      // Store location
-      final sLat = _num(order['store_latitude'] ?? order['store_lat']);
-      final sLng = _num(order['store_longitude'] ?? order['store_lng']);
-
-      // Destination location
-      final dstLat = _num(order['latitude'] ?? order['delivery_latitude']);
-      final dstLng = _num(order['longitude'] ?? order['delivery_longitude']);
-
-      if (!mounted) return;
-      setState(() {
-        if (dLat != null && dLng != null) {
-          _driverLatLng = LatLng(dLat, dLng);
-          _lastUpdate = DateTime.now();
-        }
-        if (sLat != null && sLng != null) _storeLatLng = LatLng(sLat, sLng);
-        if (dstLat != null && dstLng != null) _destLatLng = LatLng(dstLat, dstLng);
-        _status = '${order['status'] ?? _status}';
-        _driverName = order['delivery_partner_name']?.toString() ?? _driverName;
-        _driverPhone = order['delivery_partner_phone']?.toString() ?? _driverPhone;
+      final base = ApiConfig.baseUrl.replaceAll(RegExp(r'/api/?$'), '');
+      final s = IO.io(base, {
+        'transports': ['websocket'],
+        'autoConnect': true,
+        'reconnection': true,
+        'reconnectionDelay': 800,
       });
+      _socket = s;
+
+      s.onConnect((_) {
+        if (!mounted) return;
+        setState(() => _connected = true);
+        s.emit('delivery:join', {'orderId': widget.orderId});
+      });
+      s.onDisconnect((_) {
+        if (!mounted) return;
+        setState(() => _connected = false);
+      });
+
+      // Accept any of the following event names — payloads are the same shape
+      for (final ev in ['location:update', 'delivery:location', 'driver_location_updated']) {
+        s.on(ev, _onLocationEvent);
+      }
+      for (final ev in ['order:status', 'status:update', 'order_status_updated']) {
+        s.on(ev, _onStatusEvent);
+      }
     } catch (_) {
-      // ignore – keep last known position
+      // offline — mock motion keeps the screen alive
     }
   }
 
-  Future<String> _httpGet(String url, String? token) async {
-    // Simple inline HTTP call to avoid adding another import.
-    final client = _HttpShim();
-    return await client.get(url, token: token);
-  }
-
-  double? _num(dynamic v) {
-    if (v == null) return null;
-    return double.tryParse('$v');
-  }
-
-  void _connectSocket() {
+  void _onLocationEvent(dynamic data) {
     try {
-      final root = ApiConfig.baseUrl.replaceAll(RegExp(r'/api/?$'), '');
-      final socket = IO.io(
-        root,
-        IO.OptionBuilder()
-            .setTransports(['websocket'])
-            .disableAutoConnect()
-            .build(),
-      );
-      socket.connect();
-      socket.onConnect((_) {
-        socket.emit('order:subscribe', {
-          'orderId': widget.orderId,
-          'role': 'customer',
-        });
-      });
-      socket.on('location:update', (data) {
-        if (!mounted || data is! Map) return;
-        final lat = _num(data['latitude'] ?? data['lat']);
-        final lng = _num(data['longitude'] ?? data['lng']);
-        if (lat != null && lng != null) {
-          setState(() {
-            _driverLatLng = LatLng(lat, lng);
-            _lastUpdate = DateTime.now();
-          });
-        }
-      });
-      socket.on('order:status', (data) {
-        if (!mounted || data is! Map) return;
-        setState(() => _status = '${data['status'] ?? _status}');
-      });
-      socket.on('delivery:assigned', (data) {
-        if (!mounted || data is! Map) return;
-        setState(() {
-          _driverName = data['driverName']?.toString() ?? _driverName;
-          _driverPhone = data['driverPhone']?.toString() ?? _driverPhone;
-        });
-      });
-      _socket = socket;
+      final m = (data is String) ? jsonDecode(data) as Map : (data as Map);
+      final lat = double.tryParse('${m['latitude'] ?? m['lat']}');
+      final lng = double.tryParse('${m['longitude'] ?? m['lng']}');
+      if (lat == null || lng == null) return;
+      final head = double.tryParse('${m['heading'] ?? m['bearing'] ?? _heading}') ?? _heading;
+      _moveDriverTo(LatLng(lat, lng), heading: head);
     } catch (_) {}
   }
 
+  void _onStatusEvent(dynamic data) {
+    try {
+      final m = (data is String) ? jsonDecode(data) as Map : (data as Map);
+      final s = (m['status'] ?? m['order_status'] ?? '').toString();
+      final newState = _stateFromString(s);
+      if (!mounted) return;
+      setState(() => _state = newState);
+    } catch (_) {}
+  }
+
+  DeliveryState _stateFromString(String s) {
+    switch (s.toLowerCase()) {
+      case 'order_placed':       return DeliveryState.orderPlaced;
+      case 'order_confirmed':    return DeliveryState.orderConfirmed;
+      case 'store_accepted':     return DeliveryState.storeAccepted;
+      case 'preparing':          return DeliveryState.preparing;
+      case 'ready_for_pickup':   return DeliveryState.readyForPickup;
+      case 'driver_assigned':    return DeliveryState.driverAssigned;
+      case 'driver_arrived_store': return DeliveryState.driverArrivedStore;
+      case 'picked_up':          return DeliveryState.pickedUp;
+      case 'on_the_way':         return DeliveryState.onTheWay;
+      case 'near_destination':   return DeliveryState.nearDestination;
+      case 'delivered':          return DeliveryState.delivered;
+      case 'cancelled':          return DeliveryState.cancelled;
+      default:                   return _state;
+    }
+  }
+
+  // ============================================================
+  //  Smooth marker motion
+  // ============================================================
+  void _moveDriverTo(LatLng target, {double? heading}) {
+    _driverFrom = _driverPos;
+    _driverTo = target;
+    if (heading != null) {
+      _headingFrom = _heading;
+      _headingTo = heading;
+    } else {
+      // auto-compute heading from delta
+      final dLat = target.latitude - _driverFrom.latitude;
+      final dLng = target.longitude - _driverFrom.longitude;
+      if (dLat != 0 || dLng != 0) {
+        _headingFrom = _heading;
+        _headingTo = bearingBetween(_driverFrom.latitude, _driverFrom.longitude, target.latitude, target.longitude);
+      }
+    }
+    _markerCtrl.forward(from: 0);
+    if (_autoFollow) _fitCamera();
+  }
+
+  void _onMarkerTick() {
+    final t = Curves.easeOutCubic.transform(_markerCtrl.value);
+    final lat = _driverFrom.latitude + (_driverTo.latitude - _driverFrom.latitude) * t;
+    final lng = _driverFrom.longitude + (_driverTo.longitude - _driverFrom.longitude) * t;
+    setState(() {
+      _driverPos = LatLng(lat, lng);
+      _heading = lerpAngle(_headingFrom, _headingTo, t);
+    });
+  }
+
+  // ============================================================
+  //  Camera
+  // ============================================================
+  void _fitCamera() {
+    if (_customerPos == null || _storePos == null) return;
+    final bounds = LatLngBounds.fromPoints([
+      _driverPos, _customerPos!, _storePos!,
+    ]);
+    final cam = CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(72));
+    try { _map.fitCamera(cam); } catch (_) {}
+  }
+
+  void _recenter() {
+    setState(() => _autoFollow = true);
+    _fitCamera();
+  }
+
+  // ============================================================
+  //  Mock motion — smooth loop between store and customer
+  //  (remove once backend emits real driver locations)
+  // ============================================================
+  void _startMockMotion() {
+    // Progress between store → customer in a loop
+    double t = 0.0;
+    _mockMover = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted || _storePos == null || _customerPos == null) return;
+      t = (t + 0.03) % 1.0;
+      final lat = _storePos!.latitude + (_customerPos!.latitude - _storePos!.latitude) * t;
+      final lng = _storePos!.longitude + (_customerPos!.longitude - _storePos!.longitude) * t;
+      _moveDriverTo(LatLng(lat, lng));
+      // Bump ETA down as we move
+      if (mounted) setState(() => _etaMinutes = (18 * (1 - t)).round().clamp(1, 60));
+    });
+  }
+
+  // ============================================================
+  //  UI
+  // ============================================================
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-    if (_error != null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Track order')),
-        body: Center(child: Text(_error!)),
-      );
-    }
-
-    final center = _driverLatLng ??
-        _storeLatLng ??
-        _destLatLng ??
-        const LatLng(17.3850, 78.4867);
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Order #PVL${widget.orderId}'),
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: _fetchLocationFromHttp,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
+      backgroundColor: PVL.bg,
       body: Stack(
         children: [
-          FlutterMap(
-            options: MapOptions(
-              initialCenter: center,
-              initialZoom: 14,
-              minZoom: 5,
-              maxZoom: 18,
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.pvlcommerce.customer',
-              ),
-              // Route lines: store → driver, driver → destination
-              PolylineLayer(
-                polylines: [
-                  if (_storeLatLng != null && _driverLatLng != null)
-                    Polyline(
-                      points: [_storeLatLng!, _driverLatLng!],
-                      strokeWidth: 3,
-                      color: AppColors.brandPrimary.withValues(alpha: 0.6),
-                    ),
-                  if (_driverLatLng != null && _destLatLng != null)
-                    Polyline(
-                      points: [_driverLatLng!, _destLatLng!],
-                      strokeWidth: 3,
-                      color: Colors.blue.withValues(alpha: 0.7),
-                    ),
-                ],
-              ),
-              MarkerLayer(
-                markers: [
-                  if (_storeLatLng != null)
-                    Marker(
-                      point: _storeLatLng!,
-                      width: 60,
-                      height: 60,
-                      child: _marker(
-                        Icons.storefront_rounded,
-                        AppColors.brandDark,
-                        'Store',
-                      ),
-                    ),
-                  if (_destLatLng != null)
-                    Marker(
-                      point: _destLatLng!,
-                      width: 60,
-                      height: 60,
-                      child: _marker(
-                        Icons.location_on_rounded,
-                        Colors.red,
-                        'You',
-                      ),
-                    ),
-                  if (_driverLatLng != null)
-                    Marker(
-                      point: _driverLatLng!,
-                      width: 70,
-                      height: 70,
-                      child: _marker(
-                        Icons.delivery_dining_rounded,
-                        AppColors.brandPrimary,
-                        'Driver',
-                      ),
-                    ),
-                ],
-              ),
-              RichAttributionWidget(
-                attributions: [
-                  TextSourceAttribution('OpenStreetMap contributors'),
-                ],
-              ),
-            ],
-          ),
-          // Status pill (top)
-          Positioned(
-            top: 12,
-            left: 12,
-            right: 12,
-            child: _statusPill(),
-          ),
-          // Bottom info card
-          Positioned(
-            left: 12,
-            right: 12,
-            bottom: 12,
-            child: _bottomCard(),
-          ),
+          _buildMap(),
+          _buildTopBar(),
+          if (!_connected) _buildOfflineBanner(),
+          _buildRecenterButton(),
+          _buildSheet(),
         ],
       ),
     );
   }
 
-  Widget _marker(IconData icon, Color color, String label) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
+  Widget _buildMap() {
+    return FlutterMap(
+      mapController: _map,
+      options: MapOptions(
+        initialCenter: _customerPos ?? const LatLng(17.3850, 78.4867),
+        initialZoom: 13,
+        minZoom: 4,
+        maxZoom: 18,
+        onPositionChanged: (pos, hasGesture) {
+          if (hasGesture && _autoFollow) {
+            setState(() => _autoFollow = false);
+          }
+        },
+      ),
       children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: color.withValues(alpha: 0.4),
-                blurRadius: 8,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: Icon(icon, color: color, size: 26),
+        TileLayer(
+          urlTemplate: pvlMapTileUrl,
+          userAgentPackageName: 'com.pvl.mart',
+          tileProvider: NetworkTileProvider(),
         ),
-        const SizedBox(height: 2),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(8),
+        // Route: straight polyline from driver → customer
+        PolylineLayer(polylines: [
+          if (_driverPos != _customerPos)
+            Polyline(
+              points: [_driverPos, _customerPos ?? _driverPos],
+              strokeWidth: 5,
+              color: PVL.green,
+            ),
+          if (_driverPos != _customerPos)
+            Polyline(
+              points: [_driverPos, _customerPos ?? _driverPos],
+              strokeWidth: 1.5,
+              color: Colors.white.withValues(alpha: 0.6),
+            ),
+          if (_storePos != null)
+            Polyline(
+              points: [_storePos!, _driverPos],
+              strokeWidth: 3,
+              color: PVL.green.withValues(alpha: 0.35),
+            ),
+        ]),
+        MarkerLayer(markers: [
+          if (_storePos != null)
+            Marker(
+              point: _storePos!,
+              width: 48, height: 48,
+              alignment: Alignment.center,
+              child: const StoreMarker(pickedUp: true),
+            ),
+          if (_customerPos != null)
+            Marker(
+              point: _customerPos!,
+              width: 48, height: 54,
+              alignment: Alignment.topCenter,
+              child: const DestinationMarker(),
+            ),
+          Marker(
+            point: _driverPos,
+            width: 66, height: 66,
+            alignment: Alignment.center,
+            child: DriverMarker(heading: _heading),
           ),
-          child: Text(
-            label,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.w700),
-          ),
+        ]),
+        const RichAttributionWidget(
+          attributions: [TextSourceAttribution(pvlMapAttribution)],
         ),
       ],
     );
   }
 
-  Widget _statusPill() {
-    final status = _status.replaceAll('_', ' ').toUpperCase();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 12,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: const BoxDecoration(
-              color: AppColors.brandPrimary,
-              shape: BoxShape.circle,
+  Widget _buildTopBar() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            _glassButton(
+              icon: Icons.arrow_back_ios_new_rounded,
+              onTap: () => Navigator.pop(context),
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(status,
-              style: const TextStyle(
-                  fontWeight: FontWeight.w800, fontSize: 13)),
-          if (_lastUpdate != null) ...[
-            const SizedBox(width: 12),
-            Text(
-              'updated ${_timeAgo(_lastUpdate!)}',
-              style: const TextStyle(
-                  fontSize: 11, color: AppColors.inkMuted),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  borderRadius: BorderRadius.circular(PVL.r16),
+                  boxShadow: PVL.softShadow,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.receipt_long, size: 18, color: PVL.green),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Order #${widget.orderId}',
+                          style: PVL.h2, overflow: TextOverflow.ellipsis),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: PVL.greenSoft,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(_stateLabel(_state),
+                          style: const TextStyle(
+                              fontSize: 10, color: PVL.greenDark, fontWeight: FontWeight.w700)),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
-        ],
+        ),
       ),
     );
   }
 
-  Widget _bottomCard() {
-    final distance = _driverLatLng != null && _destLatLng != null
-        ? const Distance().as(
-            LengthUnit.Kilometer, _driverLatLng!, _destLatLng!)
-        : null;
-    final eta = distance != null ? (distance / 25 * 60).round() : null;
+  Widget _glassButton({required IconData icon, required VoidCallback onTap}) {
+    return Material(
+      color: Colors.white,
+      shape: const CircleBorder(),
+      elevation: 4,
+      shadowColor: Colors.black26,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: 46, height: 46,
+          child: Icon(icon, size: 20, color: PVL.textDark),
+        ),
+      ),
+    );
+  }
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildOfflineBanner() {
+    return Positioned(
+      top: 78, left: 12, right: 12,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: PVL.warning,
+          borderRadius: BorderRadius.circular(PVL.r12),
+          boxShadow: PVL.softShadow,
+        ),
+        child: const Row(
           children: [
-            if (_driverName != null || _driverPhone != null) ...[
+            SizedBox(
+              width: 14, height: 14,
+              child: CircularProgressIndicator(
+                color: Colors.white, strokeWidth: 2,
+              ),
+            ),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text('Reconnecting…',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecenterButton() {
+    return Positioned(
+      right: 16,
+      bottom: MediaQuery.of(context).size.height * 0.35 + 12,
+      child: AnimatedOpacity(
+        opacity: _autoFollow ? 0 : 1,
+        duration: const Duration(milliseconds: 200),
+        child: Material(
+          color: Colors.white,
+          shape: const CircleBorder(),
+          elevation: 6,
+          shadowColor: Colors.black26,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: _recenter,
+            child: const SizedBox(
+              width: 48, height: 48,
+              child: Icon(Icons.my_location, size: 20, color: PVL.green),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSheet() {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.34,
+      minChildSize: 0.30,
+      maxChildSize: 0.88,
+      snap: true,
+      snapSizes: const [0.34, 0.88],
+      builder: (_, scrollCtrl) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(PVL.r24)),
+            boxShadow: [
+              BoxShadow(color: Colors.black12, blurRadius: 20, offset: Offset(0, -4)),
+            ],
+          ),
+          child: ListView(
+            controller: scrollCtrl,
+            padding: EdgeInsets.zero,
+            children: [
+              // Handle
+              Center(
+                child: Container(
+                  width: 42, height: 4,
+                  margin: const EdgeInsets.only(top: 10, bottom: 6),
+                  decoration: BoxDecoration(
+                    color: PVL.divider,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _etaRow(),
+                    const SizedBox(height: 16),
+                    _driverRow(),
+                    const SizedBox(height: 14),
+                    _callChatRow(),
+                    const SizedBox(height: 20),
+                    const Text('Delivery progress', style: PVL.overline),
+                    const SizedBox(height: 10),
+                    _timelineWidget(),
+                    const SizedBox(height: 20),
+                    _orderSummary(),
+                    const SizedBox(height: 12),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _etaRow() {
+    final veryClose = _etaMinutes <= 3;
+    final color = veryClose ? PVL.green : PVL.textDark;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 400),
+          transitionBuilder: (child, anim) => FadeTransition(
+            opacity: anim,
+            child: SizeTransition(sizeFactor: anim, axis: Axis.horizontal, child: child),
+          ),
+          child: Text(
+            '$_etaMinutes',
+            key: ValueKey(_etaMinutes),
+            style: PVL.displayNumber.copyWith(color: color),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 4, left: 4),
+          child: Text(' min', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: PVL.textMuted)),
+        ),
+        const Spacer(),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(veryClose ? 'Arriving now' : 'Arriving in', style: PVL.caption),
+            const SizedBox(height: 2),
+            Text(
+              veryClose ? 'Nearby' : 'by ${_etaClock()}',
+              style: PVL.body.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  String _etaClock() {
+    final now = DateTime.now().add(Duration(minutes: _etaMinutes));
+    final h = now.hour % 12 == 0 ? 12 : now.hour % 12;
+    final m = now.minute.toString().padLeft(2, '0');
+    final ampm = now.hour >= 12 ? 'PM' : 'AM';
+    return '$h:$m $ampm';
+  }
+
+  Widget _driverRow() {
+    return Row(
+      children: [
+        Container(
+          width: 52, height: 52,
+          decoration: BoxDecoration(
+            color: PVL.greenSoft,
+            borderRadius: BorderRadius.circular(PVL.r16),
+          ),
+          child: const Icon(Icons.person, color: PVL.greenDark, size: 28),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Row(
                 children: [
-                  const CircleAvatar(
-                    backgroundColor: AppColors.brandSoft,
-                    child: Icon(Icons.delivery_dining,
-                        color: AppColors.brandDark),
-                  ),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  Text(_driverName, style: PVL.h2),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: PVL.greenSoft,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(_driverName ?? 'Delivery partner',
+                        const Icon(Icons.star_rounded, size: 12, color: PVL.greenDark),
+                        const SizedBox(width: 2),
+                        Text('$_driverRating',
                             style: const TextStyle(
-                                fontWeight: FontWeight.w800)),
-                        if (_driverPhone != null)
-                          Text(_driverPhone!,
-                              style: const TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.inkMuted)),
+                                fontSize: 11, fontWeight: FontWeight.w700, color: PVL.greenDark)),
                       ],
                     ),
                   ),
                 ],
               ),
-              const Divider(height: AppSpacing.lg),
+              const SizedBox(height: 2),
+              Text(_driverVehicle, style: PVL.caption),
             ],
-            Row(
-              children: [
-                Expanded(
-                  child: _stat(
-                    icon: Icons.route_rounded,
-                    label: 'Distance',
-                    value: distance == null
-                        ? '—'
-                        : '${distance.toStringAsFixed(1)} km',
-                  ),
-                ),
-                Expanded(
-                  child: _stat(
-                    icon: Icons.timer_outlined,
-                    label: 'ETA',
-                    value: eta == null ? '—' : '$eta min',
-                  ),
-                ),
-              ],
-            ),
-            if (_driverLatLng == null)
-              const Padding(
-                padding: EdgeInsets.only(top: AppSpacing.sm),
-                child: Text(
-                  'Waiting for the delivery partner to start moving…',
-                  style:
-                      TextStyle(fontSize: 11, color: AppColors.inkMuted),
-                ),
-              ),
-          ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _callChatRow() {
+    return Row(
+      children: [
+        Expanded(child: _pillBtn(icon: Icons.call, label: 'Call', filled: true, onTap: () {})),
+        const SizedBox(width: 10),
+        Expanded(child: _pillBtn(icon: Icons.chat_bubble_outline, label: 'Chat', filled: false, onTap: () {})),
+      ],
+    );
+  }
+
+  Widget _pillBtn({
+    required IconData icon, required String label, required bool filled, required VoidCallback onTap,
+  }) {
+    return Material(
+      color: filled ? PVL.green : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(PVL.r12),
+        side: BorderSide(color: filled ? Colors.transparent : PVL.border),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(PVL.r12),
+        onTap: onTap,
+        child: SizedBox(
+          height: 48,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18, color: filled ? Colors.white : PVL.textDark),
+              const SizedBox(width: 8),
+              Text(label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: filled ? Colors.white : PVL.textDark,
+                  )),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _stat({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
+  Widget _timelineWidget() {
+    final currentIdx = _timeline.indexOf(_state) == -1
+        ? _deriveTimelineIdx(_state)
+        : _timeline.indexOf(_state);
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(icon, size: 16, color: AppColors.brandDark),
-            const SizedBox(width: 4),
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.inkMuted)),
-          ],
-        ),
-        const SizedBox(height: 2),
-        Text(value,
-            style: const TextStyle(
-                fontSize: 18, fontWeight: FontWeight.w800)),
-      ],
+      children: List.generate(_timeline.length, (i) {
+        final done = i < currentIdx;
+        final active = i == currentIdx;
+        final last = i == _timeline.length - 1;
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 30,
+                child: Column(
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      width: active ? 22 : 18,
+                      height: active ? 22 : 18,
+                      margin: const EdgeInsets.only(top: 2),
+                      decoration: BoxDecoration(
+                        color: done || active ? PVL.green : Colors.white,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: done || active ? PVL.green : PVL.border,
+                          width: 2,
+                        ),
+                      ),
+                      child: done
+                        ? const Icon(Icons.check, size: 12, color: Colors.white)
+                        : active
+                          ? Container(
+                              margin: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                  color: Colors.white, shape: BoxShape.circle),
+                            )
+                          : null,
+                    ),
+                    if (!last)
+                      Expanded(
+                        child: Container(
+                          width: 2,
+                          margin: const EdgeInsets.symmetric(vertical: 2),
+                          color: done ? PVL.green : PVL.divider,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(top: last ? 0 : 2, bottom: last ? 0 : 12),
+                  child: Text(
+                    _stateLabel(_timeline[i]),
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      color: done || active ? PVL.textDark : PVL.textMuted,
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }),
     );
   }
 
-  String _timeAgo(DateTime t) {
-    final diff = DateTime.now().difference(t);
-    if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
-    return '${diff.inMinutes}m ago';
+  int _deriveTimelineIdx(DeliveryState s) {
+    // Map detailed states to the nearest visible timeline row
+    switch (s) {
+      case DeliveryState.orderPlaced:
+      case DeliveryState.orderConfirmed:
+        return 0;
+      case DeliveryState.storeAccepted:
+      case DeliveryState.preparing:
+      case DeliveryState.readyForPickup:
+        return 1;
+      case DeliveryState.driverAssigned:
+      case DeliveryState.driverArrivedStore:
+      case DeliveryState.pickedUp:
+        return 2;
+      case DeliveryState.onTheWay:
+        return 3;
+      case DeliveryState.nearDestination:
+        return 4;
+      case DeliveryState.delivered:
+        return 5;
+      default:
+        return 0;
+    }
   }
-}
 
-/// Minimal HTTP GET shim so we don't need to add an extra import.
-class _HttpShim {
-  Future<String> get(String url, {String? token}) async {
-    final res = await _httpGet(url, token);
-    return res;
+  String _stateLabel(DeliveryState s) {
+    switch (s) {
+      case DeliveryState.orderPlaced:       return 'Order placed';
+      case DeliveryState.orderConfirmed:    return 'Order confirmed';
+      case DeliveryState.storeAccepted:     return 'Store accepted';
+      case DeliveryState.preparing:         return 'Preparing';
+      case DeliveryState.readyForPickup:    return 'Ready for pickup';
+      case DeliveryState.driverAssigned:    return 'Driver assigned';
+      case DeliveryState.driverArrivedStore:return 'Driver at store';
+      case DeliveryState.pickedUp:          return 'Picked up';
+      case DeliveryState.onTheWay:          return 'On the way';
+      case DeliveryState.nearDestination:   return 'Arriving';
+      case DeliveryState.delivered:         return 'Delivered';
+      case DeliveryState.cancelled:         return 'Cancelled';
+    }
   }
-}
 
-// Simple inline HTTP helper using package:http (already a dependency)
-Future<String> _httpGet(String url, String? token) async {
-  // ignore: avoid_dynamic_calls
-  final client = await _getClient();
-  // ignore: avoid_dynamic_calls
-  final res = await client.get(Uri.parse(url), headers: {
-    'Accept': 'application/json',
-    if (token != null) 'Authorization': 'Bearer $token',
-  });
-  return res.body;
-}
-
-Future<dynamic> _getClient() async {
-  // Lazy import http to keep the file self-contained
-  // ignore: implementation_imports
-  return _httpClientFactory();
-}
-
-dynamic _httpClientFactory() {
-  // Using package:http → HttpClient()
-  // This indirection lets us avoid extra imports at the top.
-  // ignore: avoid_dynamic_calls
-  return _HttpClientHolder.client;
-}
-
-class _HttpClientHolder {
-  static final client = _createClient();
-  static dynamic _createClient() {
-    // Fallback: use http package's top-level get
-    // ignore: avoid_dynamic_calls
-    return _HttpPackageBridge();
+  Widget _orderSummary() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: PVL.bg,
+        borderRadius: BorderRadius.circular(PVL.r16),
+        border: Border.all(color: PVL.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(PVL.r12),
+            ),
+            child: const Icon(Icons.receipt_long_outlined, size: 20, color: PVL.textMuted),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Order summary', style: PVL.caption),
+                SizedBox(height: 2),
+                Text('Tap to view items & total',
+                    style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: PVL.textDark)),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right, color: PVL.textMuted),
+        ],
+      ),
+    );
   }
-}
-
-class _HttpPackageBridge {
-  Future<dynamic> get(Uri uri, {Map<String, String>? headers}) async {
-    // Uses http package's top-level get via a function reference
-    return _httpPackageGet(uri, headers: headers);
-  }
-}
-
-// These are declared in a separate file to keep the imports clean.
-// See live_tracking_screen_http.dart below.
-Future<dynamic> _httpPackageGet(Uri uri, {Map<String, String>? headers}) async {
-  throw UnimplementedError();
 }

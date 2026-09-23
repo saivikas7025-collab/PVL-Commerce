@@ -1,0 +1,433 @@
+﻿/**
+ * PVL Mart — Dispatch Engine (V1)
+ *  Single-store, single-driver, admin-override-ready.
+ *  Steps: find eligible stores → score → select → reserve → offer → accept/timeout → driver.
+ */
+const { pool } = require('../db');
+
+// ---------- distance ----------
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const d2r = (d) => (d * Math.PI) / 180;
+  const dLat = d2r(lat2 - lat1);
+  const dLng = d2r(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(d2r(lat1)) * Math.cos(d2r(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// ---------- config ----------
+const FALLBACK = {
+  store_weight_availability: 0.35,
+  store_weight_distance: 0.20,
+  store_weight_prep_time: 0.20,
+  store_weight_workload: 0.10,
+  store_weight_reliability: 0.10,
+  store_weight_preference: 0.05,
+  driver_weight_distance: 0.40,
+  driver_weight_workload: 0.20,
+  driver_weight_pickup_time: 0.20,
+  driver_weight_route: 0.10,
+  driver_weight_availability: 0.10,
+  store_offer_timeout_seconds: 90,
+  driver_offer_timeout_seconds: 30,
+  max_store_distance_km: 10,
+  max_driver_distance_km: 8,
+};
+
+async function getConfig() {
+  const r = await pool.query('SELECT * FROM dispatch_config WHERE id=1');
+  return r.rowCount ? { ...FALLBACK, ...r.rows[0] } : FALLBACK;
+}
+
+// ---------- store eligibility ----------
+async function findEligibleStores(customerLat, customerLng, items, cfg) {
+  // stores: open, active, approved, within max radius
+  const { rows: stores } = await pool.query(
+    `SELECT id, name, latitude, longitude, is_online, is_active, approval_status,
+            delivery_radius_km, prep_time_minutes, current_load, reliability_score
+       FROM stores
+      WHERE is_active = TRUE
+        AND approval_status = 'approved'
+        AND latitude IS NOT NULL AND longitude IS NOT NULL
+        AND latitude <> 0 AND longitude <> 0`
+  );
+
+  const out = [];
+  for (const s of stores) {
+    const dist = haversineKm(customerLat, customerLng, Number(s.latitude), Number(s.longitude));
+    const radius = Number(s.delivery_radius_km || 5);
+    if (dist > Math.min(radius, Number(cfg.max_store_distance_km))) continue;
+
+    // check inventory availability for every line item
+    let availLines = 0;
+    let totalLines = items.length;
+    for (const it of items) {
+      const inv = await pool.query(
+        `SELECT stock_quantity, reserved_quantity, is_available
+           FROM inventory WHERE store_id=$1 AND product_id=$2 LIMIT 1`,
+        [s.id, it.product_id]
+      );
+      if (inv.rowCount === 0) continue;
+      const row = inv.rows[0];
+      if (!row.is_available) continue;
+      const avail = row.stock_quantity - row.reserved_quantity;
+      if (avail >= it.quantity) availLines += 1;
+    }
+
+    if (availLines === 0) continue; // cannot fulfil any line
+
+    out.push({
+      ...s,
+      distance_km: dist,
+      avail_lines: availLines,
+      total_lines: totalLines,
+      availability_ratio: availLines / totalLines,
+    });
+  }
+  return out;
+}
+
+// ---------- store scoring ----------
+function scoreStore(store, cfg) {
+  const maxDist = Number(cfg.max_store_distance_km);
+  const distScore = 1 - Math.min(store.distance_km / maxDist, 1);
+  const prepNorm = 1 - Math.min(Number(store.prep_time_minutes || 15) / 60, 1);
+  const loadNorm = 1 - Math.min(Number(store.current_load || 0) / 20, 1);
+  const relNorm = Math.min(Number(store.reliability_score || 5) / 5, 1);
+
+  const score =
+    cfg.store_weight_availability * store.availability_ratio +
+    cfg.store_weight_distance * distScore +
+    cfg.store_weight_prep_time * prepNorm +
+    cfg.store_weight_workload * loadNorm +
+    cfg.store_weight_reliability * relNorm +
+    cfg.store_weight_preference * 1.0; // preference always 1 for V1
+
+  return Math.round(score * 1000) / 10;
+}
+
+async function selectBestStore(customerLat, customerLng, items) {
+  const cfg = await getConfig();
+  const eligible = await findEligibleStores(customerLat, customerLng, items, cfg);
+  if (!eligible.length) return { ok: false, reason: 'no_eligible_store', candidates: [] };
+
+  // only stores that can fulfil the FULL order (V1: single-store rule)
+  const full = eligible.filter((s) => s.availability_ratio === 1);
+  const pool_ = full.length ? full : eligible;
+
+  const scored = pool_
+    .map((s) => ({ ...s, score: scoreStore(s, cfg) }))
+    .sort((a, b) => b.score - a.score);
+
+  return { ok: true, best: scored[0], candidates: scored, config: cfg };
+}
+
+// ---------- inventory reservation ----------
+async function reserveInventory(orderId, storeId, items) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const it of items) {
+      // check
+      const r = await client.query(
+        `SELECT stock_quantity, reserved_quantity, is_available
+           FROM inventory WHERE store_id=$1 AND product_id=$2 FOR UPDATE`,
+        [storeId, it.product_id]
+      );
+      if (r.rowCount === 0) throw new Error(`No inventory for product ${it.product_id}`);
+      const row = r.rows[0];
+      const avail = row.stock_quantity - row.reserved_quantity;
+      if (avail < it.quantity) {
+        throw new Error(`Insufficient stock for product ${it.product_id}: need ${it.quantity}, have ${avail}`);
+      }
+      await client.query(
+        `UPDATE inventory SET reserved_quantity = reserved_quantity + $1, updated_at = now()
+           WHERE store_id=$2 AND product_id=$3`,
+        [it.quantity, storeId, it.product_id]
+      );
+      await client.query(
+        `INSERT INTO inventory_reservations (order_id, store_id, product_id, quantity, status)
+         VALUES ($1,$2,$3,$4,'reserved')`,
+        [orderId, storeId, it.product_id, it.quantity]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function releaseInventory(orderId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT store_id, product_id, quantity FROM inventory_reservations
+        WHERE order_id=$1 AND status='reserved'`,
+      [orderId]
+    );
+    for (const r of rows) {
+      await client.query(
+        `UPDATE inventory SET reserved_quantity = GREATEST(reserved_quantity - $1, 0), updated_at=now()
+           WHERE store_id=$2 AND product_id=$3`,
+        [r.quantity, r.store_id, r.product_id]
+      );
+      await client.query(
+        `UPDATE inventory_reservations SET status='released', released_at=now()
+           WHERE order_id=$1 AND store_id=$2 AND product_id=$3 AND status='reserved'`,
+        [orderId, r.store_id, r.product_id]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// ---------- offer to store ----------
+async function offerToStore(orderId, storeId, score, cfg) {
+  const expires = new Date(Date.now() + cfg.store_offer_timeout_seconds * 1000);
+  await pool.query(
+    `INSERT INTO store_assignments (order_id, store_id, status, score, expires_at)
+     VALUES ($1,$2,'offered',$3,$4)`,
+    [orderId, storeId, score, expires]
+  );
+  await pool.query(
+    `UPDATE orders SET store_id=$1, dispatch_status='store_offered', updated_at=now() WHERE id=$2`,
+    [storeId, orderId]
+  );
+}
+
+// ---------- driver eligibility ----------
+async function findEligibleDrivers(storeLat, storeLng, cfg) {
+  const { rows } = await pool.query(
+    `SELECT dp.id, dp.user_id, dp.vehicle_type, dp.vehicle_number,
+            dp.current_latitude, dp.current_longitude,
+            dp.active_orders_count, dp.reliability_score, dp.avg_rating
+       FROM delivery_partners dp
+      WHERE dp.is_online = TRUE
+        AND dp.is_available = TRUE
+        AND dp.approval_status = 'approved'
+        AND dp.current_latitude IS NOT NULL
+        AND dp.current_longitude IS NOT NULL`
+  );
+  const out = [];
+  for (const d of rows) {
+    const dist = haversineKm(storeLat, storeLng, Number(d.current_latitude), Number(d.current_longitude));
+    if (dist > Number(cfg.max_driver_distance_km)) continue;
+    out.push({ ...d, distance_km: dist });
+  }
+  return out;
+}
+
+function scoreDriver(d, cfg) {
+  const maxDist = Number(cfg.max_driver_distance_km);
+  const distScore = 1 - Math.min(d.distance_km / maxDist, 1);
+  const loadNorm = 1 - Math.min(Number(d.active_orders_count || 0) / 5, 1);
+  const relNorm = Math.min(Number(d.reliability_score || 5) / 5, 1);
+
+  const score =
+    cfg.driver_weight_distance * distScore +
+    cfg.driver_weight_workload * loadNorm +
+    cfg.driver_weight_pickup_time * distScore + // approximation for V1
+    cfg.driver_weight_route * distScore +
+    cfg.driver_weight_availability * relNorm;
+
+  return Math.round(score * 1000) / 10;
+}
+
+async function selectBestDriver(storeLat, storeLng) {
+  const cfg = await getConfig();
+  const elig = await findEligibleDrivers(storeLat, storeLng, cfg);
+  if (!elig.length) return { ok: false, reason: 'no_eligible_driver' };
+  const scored = elig.map((d) => ({ ...d, score: scoreDriver(d, cfg) })).sort((a, b) => b.score - a.score);
+  return { ok: true, best: scored[0], candidates: scored, config: cfg };
+}
+
+async function offerToDriver(orderId, driverId, score, cfg) {
+  const expires = new Date(Date.now() + cfg.driver_offer_timeout_seconds * 1000);
+  await pool.query(
+    `INSERT INTO delivery_assignments
+       (order_id, delivery_partner_id, status, score, offered_at, expires_at)
+     VALUES ($1,$2,'offered',$3, now(), $4)`,
+    [orderId, driverId, score, expires]
+  );
+  await pool.query(
+    `UPDATE orders SET driver_id=$1, dispatch_status='driver_offered', updated_at=now() WHERE id=$2`,
+    [driverId, orderId]
+  );
+}
+
+// ---------- main entry ----------
+async function dispatchOrder(orderId) {
+  const orderQ = await pool.query(`SELECT * FROM orders WHERE id=$1`, [orderId]);
+  if (!orderQ.rowCount) return { ok: false, reason: 'order_not_found' };
+  const order = orderQ.rows[0];
+
+  const itemsQ = await pool.query(
+    `SELECT product_id, quantity FROM order_items WHERE order_id=$1`, [orderId]
+  );
+  if (!itemsQ.rowCount) return { ok: false, reason: 'no_order_items' };
+  const items = itemsQ.rows;
+
+  const lat = Number(order.gps_lat);
+  const lng = Number(order.gps_lng);
+  if (!lat || !lng) return { ok: false, reason: 'no_customer_gps' };
+
+  const storeSel = await selectBestStore(lat, lng, items);
+  if (!storeSel.ok) {
+    await pool.query(`UPDATE orders SET dispatch_status='no_store_found', updated_at=now() WHERE id=$1`, [orderId]);
+    return storeSel;
+  }
+
+  const best = storeSel.best;
+  try {
+    await reserveInventory(orderId, best.id, items);
+  } catch (e) {
+    await pool.query(`UPDATE orders SET dispatch_status='reservation_failed', updated_at=now() WHERE id=$1`, [orderId]);
+    return { ok: false, reason: 'reservation_failed', message: e.message };
+  }
+
+  await offerToStore(orderId, best.id, best.score, storeSel.config);
+  return { ok: true, stage: 'store_offered', storeId: best.id, score: best.score, candidates: storeSel.candidates };
+}
+
+async function dispatchToDriver(orderId) {
+  const o = await pool.query(
+    `SELECT o.id, s.latitude, s.longitude FROM orders o JOIN stores s ON s.id=o.store_id WHERE o.id=$1`,
+    [orderId]
+  );
+  if (!o.rowCount) return { ok: false, reason: 'order_or_store_missing' };
+  const store = o.rows[0];
+
+  const sel = await selectBestDriver(Number(store.latitude), Number(store.longitude));
+  if (!sel.ok) {
+    await pool.query(`UPDATE orders SET dispatch_status='no_driver_found', updated_at=now() WHERE id=$1`, [orderId]);
+    return sel;
+  }
+  await offerToDriver(orderId, sel.best.id, sel.best.score, sel.config);
+  return { ok: true, stage: 'driver_offered', driverId: sel.best.id, score: sel.best.score, candidates: sel.candidates };
+}
+
+async function storeAccepts(orderId, storeId) {
+  await pool.query(
+    `UPDATE store_assignments SET status='accepted', responded_at=now()
+       WHERE order_id=$1 AND store_id=$2 AND status='offered'`,
+    [orderId, storeId]
+  );
+  await pool.query(
+    `UPDATE orders SET dispatch_status='store_accepted', accepted_by_store_at=now(), updated_at=now() WHERE id=$1`,
+    [orderId]
+  );
+  await pool.query(`UPDATE stores SET current_load = current_load + 1 WHERE id=$1`, [storeId]);
+  return { ok: true };
+}
+
+async function storeRejects(orderId, storeId, reason) {
+  await pool.query(
+    `UPDATE store_assignments SET status='rejected', responded_at=now(), rejection_reason=$3
+       WHERE order_id=$1 AND store_id=$2 AND status='offered'`,
+    [orderId, storeId, reason || null]
+  );
+  await releaseInventory(orderId);
+  await pool.query(`UPDATE orders SET dispatch_status='store_rejected', updated_at=now() WHERE id=$1`, [orderId]);
+  return { ok: true };
+}
+
+async function driverAccepts(orderId, driverId) {
+  await pool.query(
+    `UPDATE delivery_assignments SET status='accepted', responded_at=now()
+       WHERE order_id=$1 AND delivery_partner_id=$2 AND status='offered'`,
+    [orderId, driverId]
+  );
+  await pool.query(
+    `UPDATE orders SET dispatch_status='driver_accepted', accepted_by_driver_at=now(), updated_at=now() WHERE id=$1`,
+    [orderId]
+  );
+  await pool.query(
+    `UPDATE delivery_partners SET active_orders_count = active_orders_count + 1 WHERE id=$1`,
+    [driverId]
+  );
+  return { ok: true };
+}
+
+async function driverRejects(orderId, driverId, reason) {
+  await pool.query(
+    `UPDATE delivery_assignments SET status='rejected', responded_at=now(), rejection_reason=$3
+       WHERE order_id=$1 AND delivery_partner_id=$2 AND status='offered'`,
+    [orderId, driverId, reason || null]
+  );
+  await pool.query(`UPDATE orders SET dispatch_status='driver_rejected', updated_at=now() WHERE id=$1`, [orderId]);
+  return { ok: true };
+}
+
+// ---------- admin overrides ----------
+async function adminReassignStore(orderId, newStoreId, actor) {
+  await releaseInventory(orderId);
+  await pool.query(
+    `UPDATE store_assignments SET status='admin_reassigned', responded_at=now()
+       WHERE order_id=$1 AND status IN ('offered','accepted')`,
+    [orderId]
+  );
+  const itemsQ = await pool.query(`SELECT product_id, quantity FROM order_items WHERE order_id=$1`, [orderId]);
+  await reserveInventory(orderId, newStoreId, itemsQ.rows);
+  await pool.query(
+    `INSERT INTO store_assignments (order_id, store_id, status, score, offered_at, responded_at)
+     VALUES ($1,$2,'admin_reassigned', NULL, now(), now())`,
+    [orderId, newStoreId]
+  );
+  await pool.query(
+    `UPDATE orders SET store_id=$1, dispatch_status='store_accepted', updated_at=now() WHERE id=$2`,
+    [newStoreId, orderId]
+  );
+  return { ok: true, actor: actor || 'admin' };
+}
+
+async function adminReassignDriver(orderId, newDriverId, actor) {
+  await pool.query(
+    `UPDATE delivery_assignments SET status='admin_reassigned', responded_at=now()
+       WHERE order_id=$1 AND status IN ('offered','accepted')`,
+    [orderId]
+  );
+  await pool.query(
+    `INSERT INTO delivery_assignments
+       (order_id, delivery_partner_id, status, score, offered_at, responded_at)
+     VALUES ($1,$2,'admin_reassigned', NULL, now(), now())`,
+    [orderId, newDriverId]
+  );
+  await pool.query(
+    `UPDATE orders SET driver_id=$1, dispatch_status='driver_accepted',
+       accepted_by_driver_at=now(), updated_at=now() WHERE id=$2`,
+    [newDriverId, orderId]
+  );
+  return { ok: true, actor: actor || 'admin' };
+}
+
+module.exports = {
+  haversineKm,
+  getConfig,
+  findEligibleStores,
+  scoreStore,
+  selectBestStore,
+  reserveInventory,
+  releaseInventory,
+  findEligibleDrivers,
+  scoreDriver,
+  selectBestDriver,
+  dispatchOrder,
+  dispatchToDriver,
+  storeAccepts,
+  storeRejects,
+  driverAccepts,
+  driverRejects,
+  adminReassignStore,
+  adminReassignDriver,
+};

@@ -7,6 +7,7 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../config/api_config.dart';
 import '../services/order_service.dart';
 import '../theme/app_theme.dart';
+import 'live_tracking_screen.dart';
 
 /// Step keys + labels + icons for the timeline.
 const List<Map<String, Object>> _kSteps = [
@@ -139,7 +140,20 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   Widget build(BuildContext context) {
     if (_order == null) {
       if (_error != null) {
-        return Scaffold(appBar: AppBar(title: const Text('Order')), body: Center(child: Text(_error!)));
+        return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'track-live',
+        onPressed: () {
+          LiveTrackingScreen.show(
+            context,
+            widget.orderId,
+          );
+        },
+        icon: const Icon(Icons.map),
+        label: const Text('Track Live'),
+        backgroundColor: const Color(0xFF10B981),
+        foregroundColor: Colors.white,
+      ),appBar: AppBar(title: const Text('Order')), body: Center(child: Text(_error!)));
       }
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }

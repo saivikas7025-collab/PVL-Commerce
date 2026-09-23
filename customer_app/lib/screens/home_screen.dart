@@ -1,8 +1,9 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/category.dart';
+
 import '../models/order.dart';
 import '../models/product.dart';
+import '../models/section.dart';
 import '../providers/address_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
@@ -19,6 +20,7 @@ import 'categories_screen.dart';
 import 'login_screen.dart';
 import 'order_details_screen.dart';
 import 'orders_screen.dart';
+import 'section_screen.dart';
 import 'splash_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -37,8 +39,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   int _tab = _tabHome;
   int? _pendingTab;
+
   List<Product> _products = [];
-  List<Category> _categories = [];
+  List<Section> _sections = [];
   bool _loading = true;
   String? _error;
   String _query = '';
@@ -69,12 +72,12 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final result = await Future.wait([
         ProductService.getProducts(),
-        CategoryService.getCategories(),
+        CategoryService.getSections(),
       ]);
       if (!mounted) return;
       setState(() {
         _products = result[0] as List<Product>;
-        _categories = result[1] as List<Category>;
+        _sections = result[1] as List<Section>;
         _loading = false;
       });
       await _loadActiveOrder();
@@ -356,12 +359,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _categorySection() {
-    if (_categories.isEmpty) return const SizedBox.shrink();
+    if (_sections.isEmpty) return const SizedBox.shrink();
+
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.md),
+            AppSpacing.lg,
+            AppSpacing.xl,
+            AppSpacing.lg,
+            AppSpacing.md,
+          ),
           child: SectionHeading(
             title: 'Shop by category',
             actionLabel: 'View all',
@@ -369,15 +377,16 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         SizedBox(
-          height: 104,
+          height: 112,
           child: ListView.separated(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
             scrollDirection: Axis.horizontal,
-            itemCount: _categories.length,
-            separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.md),
+            itemCount: _sections.length,
+            separatorBuilder: (_, __) =>
+                const SizedBox(width: AppSpacing.md),
             itemBuilder: (_, index) {
-              final category = _categories[index];
-              return _categoryTile(category);
+              final section = _sections[index];
+              return _sectionTile(section);
             },
           ),
         ),
@@ -385,31 +394,52 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _categoryTile(Category category) {
+  Widget _sectionTile(Section section) {
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.md),
-      onTap: () => _selectTab(_tabCategories),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SectionScreen(
+              sectionName: section.name,
+            ),
+          ),
+        );
+      },
       child: SizedBox(
-        width: 82,
+        width: 88,
         child: Column(
           children: [
             Container(
-              width: 64,
-              height: 64,
+              width: 68,
+              height: 68,
               decoration: BoxDecoration(
-                color: AppColors.surfaceSecondary,
+                color: section.bgColor,
                 borderRadius: BorderRadius.circular(AppRadius.md),
               ),
-              child: Icon(_iconForCategory(category.name),
-                  color: AppColors.brandDark),
+              child: Center(
+                child: Text(
+                  section.icon,
+                  style: const TextStyle(
+                    fontSize: 30,
+                    height: 1,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
             ),
             const SizedBox(height: AppSpacing.sm),
-            Text(category.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w700)),
+            Text(
+              section.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                height: 1.15,
+              ),
+            ),
           ],
         ),
       ),
@@ -523,41 +553,6 @@ class _HomeScreenState extends State<HomeScreen> {
       label: Text(count > 99 ? '99+' : '$count'),
       child: Icon(icon),
     );
-  }
-
-  /// Maps category names to icons, now including Electronics & Pharma.
-  IconData _iconForCategory(String name) {
-    final value = name.toLowerCase();
-    if (value.contains('fruit') || value.contains('vegetable')) {
-      return Icons.eco_outlined;
-    }
-    if (value.contains('dairy') || value.contains('breakfast')) {
-      return Icons.breakfast_dining_outlined;
-    }
-    if (value.contains('snack') || value.contains('drink')) {
-      return Icons.local_cafe_outlined;
-    }
-    if (value.contains('beauty') || value.contains('personal')) {
-      return Icons.spa_outlined;
-    }
-    if (value.contains('baby')) return Icons.child_friendly_outlined;
-    if (value.contains('health') || value.contains('pharma')) {
-      return Icons.medical_services_outlined;
-    }
-    if (value.contains('meat') || value.contains('seafood')) {
-      return Icons.set_meal_outlined;
-    }
-    if (value.contains('frozen')) return Icons.ac_unit_outlined;
-    if (value.contains('pet')) return Icons.pets_outlined;
-    if (value.contains('electronic')) return Icons.devices_other_outlined;
-    if (value.contains('house') || value.contains('clean')) {
-      return Icons.cleaning_services_outlined;
-    }
-    if (value.contains('bakery')) return Icons.bakery_dining_outlined;
-    if (value.contains('grocery') || value.contains('staple')) {
-      return Icons.rice_bowl_outlined;
-    }
-    return Icons.category_outlined;
   }
 }
 

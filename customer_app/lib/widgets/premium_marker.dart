@@ -1,0 +1,180 @@
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import '../theme/pvl_design.dart';
+
+/// Circular white card marker for stores.
+class StoreMarker extends StatelessWidget {
+  final bool pickedUp;
+  const StoreMarker({super.key, this.pickedUp = false});
+  @override
+  Widget build(BuildContext context) {
+    return _pin(
+      icon: Icons.storefront,
+      color: pickedUp ? PVL.green : PVL.greenDark,
+      shape: _Shape.square,
+    );
+  }
+}
+
+/// Pin-shaped marker for the customer's destination.
+class DestinationMarker extends StatelessWidget {
+  const DestinationMarker({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return _pin(
+      icon: Icons.home_rounded,
+      color: PVL.textDark,
+      shape: _Shape.pin,
+    );
+  }
+}
+
+/// Circular marker for the driver, with a heading arrow that rotates.
+class DriverMarker extends StatelessWidget {
+  final double heading; // degrees, 0=north, 90=east
+  const DriverMarker({super.key, this.heading = 0});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 66,
+      height: 66,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Heading arrow behind the marker
+          AnimatedRotation(
+            turns: heading / 360.0,
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeOutCubic,
+            child: Transform.translate(
+              offset: const Offset(0, -18),
+              child: CustomPaint(
+                size: const Size(20, 20),
+                painter: _HeadingArrowPainter(),
+              ),
+            ),
+          ),
+          // Driver bubble
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: PVL.strongShadow,
+              border: Border.all(color: PVL.green, width: 2),
+            ),
+            child: const Icon(Icons.delivery_dining, color: PVL.green, size: 24),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _Shape { square, pin }
+
+Widget _pin({required IconData icon, required Color color, required _Shape shape}) {
+  if (shape == _Shape.pin) {
+    return SizedBox(
+      width: 44,
+      height: 54,
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          Positioned(
+            bottom: 0,
+            child: CustomPaint(
+              size: const Size(16, 16),
+              painter: _PinTailPainter(color: color),
+            ),
+          ),
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: PVL.strongShadow,
+              border: Border.all(color: Colors.white, width: 3),
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+  return Container(
+    width: 44,
+    height: 44,
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(PVL.r12),
+      boxShadow: PVL.strongShadow,
+    ),
+    child: Icon(icon, color: color, size: 22),
+  );
+}
+
+class _PinTailPainter extends CustomPainter {
+  final Color color;
+  _PinTailPainter({required this.color});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()..color = color;
+    final path = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width / 2, size.height)
+      ..close();
+    canvas.drawPath(path, p);
+  }
+  @override
+  bool shouldRepaint(_PinTailPainter old) => old.color != color;
+}
+
+class _HeadingArrowPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()..color = PVL.green;
+    final path = Path()
+      ..moveTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(size.width / 2, size.height * 0.72)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, p);
+  }
+  @override
+  bool shouldRepaint(_HeadingArrowPainter old) => false;
+}
+
+/// A `Tween<LatLng>`-like interpolator for smooth marker motion.
+/// Accepts two (lat,lng) pairs and returns an interpolated pair at t∈[0,1].
+class LatLngLerp {
+  final double aLat, aLng, bLat, bLng;
+  const LatLngLerp(this.aLat, this.aLng, this.bLat, this.bLng);
+  double get lat => aLat + (bLat - aLat);
+  double get lng => aLng + (bLng - aLng);
+  double latAt(double t) => aLat + (bLat - aLat) * t;
+  double lngAt(double t) => aLng + (bLng - aLng) * t;
+}
+
+double bearingBetween(double lat1, double lng1, double lat2, double lng2) {
+  final dLon = (lng2 - lng1) * math.pi / 180.0;
+  final y = math.sin(dLon) * math.cos(lat2 * math.pi / 180.0);
+  final x = math.cos(lat1 * math.pi / 180.0) * math.sin(lat2 * math.pi / 180.0) -
+            math.sin(lat1 * math.pi / 180.0) * math.cos(lat2 * math.pi / 180.0) * math.cos(dLon);
+  final brng = math.atan2(y, x) * 180.0 / math.pi;
+  return (brng + 360) % 360;
+}
+
+/// Shortest-path angle interpolation for headings.
+double lerpAngle(double a, double b, double t) {
+  final diff = ((b - a + 540) % 360) - 180;
+  return a + diff * t;
+}
+
+/// Exposed for callers who want a manual lerp
+double deg2rad(double d) => d * math.pi / 180.0;

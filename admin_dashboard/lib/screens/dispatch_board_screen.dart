@@ -1,0 +1,148 @@
+﻿import 'package:flutter/material.dart';
+import '../services/dispatch_board_api.dart';
+
+class DispatchBoardScreen extends StatefulWidget {
+  const DispatchBoardScreen({super.key});
+  @override
+  State<DispatchBoardScreen> createState() => _DispatchBoardScreenState();
+}
+
+class _DispatchBoardScreenState extends State<DispatchBoardScreen> {
+  late Future<List<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  void _reload() {
+    setState(() { _future = DispatchBoardApi.liveOrders(); });
+  }
+
+  Color _statusColor(String s) {
+    switch (s) {
+      case 'driver_accepted': return Colors.green;
+      case 'driver_offered': return Colors.blue;
+      case 'store_accepted': return Colors.teal;
+      case 'store_offered': return Colors.orange;
+      case 'no_store_found':
+      case 'no_driver_found':
+      case 'reservation_failed': return Colors.red;
+      default: return Colors.blueGrey;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Live Dispatch Board'),
+        actions: [IconButton(onPressed: _reload, icon: const Icon(Icons.refresh))],
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                  const SizedBox(height: 12),
+                  Text('${snap.error}', textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  FilledButton(onPressed: _reload, child: const Text('Retry')),
+                ]),
+              ),
+            );
+          }
+          final rows = snap.data ?? const [];
+          if (rows.isEmpty) {
+            return const Center(child: Text('No active dispatches'));
+          }
+          return RefreshIndicator(
+            onRefresh: () async => _reload(),
+            child: ListView.separated(
+              itemCount: rows.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, i) {
+                final o = rows[i];
+                final status = (o['dispatch_status'] ?? '').toString();
+                final color = _statusColor(status);
+                return ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: color.withOpacity(0.15),
+                    child: Icon(Icons.local_shipping, color: color),
+                  ),
+                  title: Text('Order #${o['order_id']} · ₹${o['total_amount'] ?? '?'}'),
+                  subtitle: Text(
+                    '${o['store_name'] ?? 'No store'}  ·  ${o['vehicle_number'] ?? 'No driver'}',
+                  ),
+                  trailing: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      status.replaceAll('_', ' '),
+                      style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  onTap: () => _showDetail(context, o['order_id'] as int),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showDetail(BuildContext context, int orderId) async {
+    try {
+      final d = await DispatchBoardApi.orderDetail(orderId);
+      if (!context.mounted) return;
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Order #$orderId', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Text('Store: ${(d['order']?['store_name']) ?? '-'}'),
+              Text('Driver: ${(d['order']?['vehicle_number']) ?? '-'}'),
+              Text('Status: ${(d['order']?['dispatch_status']) ?? '-'}'),
+              const SizedBox(height: 12),
+              const Text('Store offers:', style: TextStyle(fontWeight: FontWeight.w600)),
+              for (final s in ((d['store_offers'] as List?) ?? const []))
+                Text('  ${s['store_id']} — ${s['status']} (score ${s['score']})'),
+              const SizedBox(height: 8),
+              const Text('Driver offers:', style: TextStyle(fontWeight: FontWeight.w600)),
+              for (final s in ((d['driver_offers'] as List?) ?? const []))
+                Text('  ${s['driver_id']} — ${s['status']} (score ${s['score']})'),
+              const SizedBox(height: 16),
+              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+}

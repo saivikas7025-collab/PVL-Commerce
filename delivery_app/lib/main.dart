@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'screens/driver_kyc_screen.dart';
+import 'screens/driver_live_navigation_screen.dart';
+import 'services/driver_kyc_api.dart';
+import 'services/driver_dispatch_api.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' as FA;
@@ -443,6 +447,12 @@ class _DeliveryHomePageState extends State<DeliveryHomePage> {
         ],
       ),
       body: _pages[_selectedIndex],
+      floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'test-nav',
+        onPressed: () => DriverLiveNavigationScreen.show(context, orderId: 999, label: 'Customer'),
+        icon: const Icon(Icons.navigation),
+        label: const Text('Navigate'),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (i) => setState(() => _selectedIndex = i),
@@ -473,6 +483,8 @@ class _DashboardTabState extends State<DashboardTab> {
   bool _loading = true;
   String _error = '';
   bool _online = false;
+  bool _kycApproved = false;
+  bool _kycLoading = true;
   Position? _position;
   StreamSubscription<Position>? _positionSubscription;
   IO.Socket? _socket;
@@ -498,7 +510,12 @@ class _DashboardTabState extends State<DashboardTab> {
     try {
       _data = await DeliveryService.getDashboard();
       _online = (_data['partner']?['is_online'] ?? false) == true;
-      setState(() { _loading = false; });
+      // KYC gate
+      try {
+        final kyc = await DriverKycApi.canGoOnline(1);
+        _kycApproved = kyc['ok'] == true;
+      } catch (_) { _kycApproved = false; }
+      setState(() { _loading = false; _kycLoading = false; });
     } catch (e) {
       setState(() { _error = e.toString(); _loading = false; });
     }
@@ -572,7 +589,40 @@ class _DashboardTabState extends State<DashboardTab> {
     _socket!.connect();
   }
 
+  void _showKycBlockedDialog() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('KYC not approved'),
+        content: const Text(
+          'You cannot go online until your KYC documents are verified by admin.\n\n'
+          'Complete your KYC from Profile → KYC Verification.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DriverKycScreen(driverId: 1)),
+              ).then((_) => _loadDashboard());
+            },
+            child: const Text('Open KYC'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _toggleOnline(bool value) async {
+    if (value && !_kycApproved) {
+      _showKycBlockedDialog();
+      return;
+    }
     try {
       await DeliveryService.toggleOnline(value);
       setState(() { _online = value; });
@@ -1391,6 +1441,17 @@ class _ProfileTabState extends State<ProfileTab> {
               ),
             const Divider(),
             ListTile(
+              leading: const Icon(Icons.verified_user),
+              title: const Text('KYC Verification'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const DriverKycScreen(driverId: 1)),
+                );
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.help_outline),
               title: const Text('Support'),
               onTap: () {
@@ -1608,174 +1669,161 @@ class PendingApprovalScreen extends StatelessWidget {
 // ============================================================
 class AvailableTab extends StatefulWidget {
   const AvailableTab({super.key});
-
   @override
   State<AvailableTab> createState() => _AvailableTabState();
 }
 
 class _AvailableTabState extends State<AvailableTab> {
-  List<dynamic> _orders = [];
-  bool _loading = true;
-  String? _error;
-  int? _acceptingId;
+  static const int _driverId = 1;
+  late Future<List<Map<String, dynamic>>> _future;
+  Timer? _poll;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _reload();
+    _poll = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) _reload();
+    });
   }
 
-  Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _reload() {
+    setState(() {
+      _future = DriverDispatchApi.inbox(_driverId);
+    });
+  }
+
+  Future<void> _accept(int orderId) async {
     try {
-      final list = await DeliveryService.getAvailableOrders();
+      await DriverDispatchApi.accept(_driverId, orderId);
       if (!mounted) return;
-      setState(() { _orders = list; _loading = false; });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Order accepted')),
+      );
+      _reload();
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
-        _loading = false;
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Accept failed: ' + e.toString())),
+      );
     }
   }
 
-  Future<void> _accept(Map<String, dynamic> order) async {
-    final id = int.tryParse('${order['id']}') ?? 0;
-    if (id <= 0) return;
-    setState(() => _acceptingId = id);
+  Future<void> _decline(int orderId) async {
     try {
-      await DeliveryService.acceptOrder(id);
-      DeliveryService.activeOrderId = id;
+      await DriverDispatchApi.reject(_driverId, orderId, 'not available');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Order #PVL$id accepted!')),
+        const SnackBar(content: Text('Order declined')),
       );
-      // Navigate to order detail
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => OrderDetailPage(orderId: id)),
-      );
-      _load();
+      _reload();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Accept failed: ${e.toString().replaceFirst('Exception: ', '')}')),
+        SnackBar(content: Text('Decline failed: ' + e.toString())),
       );
-    } finally {
-      if (mounted) setState(() => _acceptingId = null);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 60, color: Colors.red),
-              const SizedBox(height: 12),
-              Text(_error!, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              ElevatedButton(onPressed: _load, child: const Text('Retry')),
-            ],
-          ),
-        ),
-      );
-    }
-    if (_orders.isEmpty) {
-      return RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          children: const [
-            SizedBox(height: 120),
-            Icon(Icons.inbox_outlined, size: 80, color: Colors.grey),
-            SizedBox(height: 12),
-            Center(child: Text('No deliveries available right now')),
-            SizedBox(height: 6),
-            Center(child: Text('Pull down to refresh', style: TextStyle(color: Colors.grey, fontSize: 12))),
-          ],
-        ),
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _orders.length,
-        itemBuilder: (_, i) {
-          final o = Map<String, dynamic>.from(_orders[i] as Map);
-          final id = int.tryParse('${o['id']}') ?? 0;
-          final storeName = o['store_name'] ?? 'Store';
-          final storeAddr = o['store_address'] ?? '';
-          final custAddr = o['full_address'] ?? '';
-          final total = o['total_amount'] ?? 0;
-          final accepting = _acceptingId == id;
-
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade100,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text('PVL$id', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                      ),
-                      const Spacer(),
-                      Text('Rs. $total', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      const Icon(Icons.storefront, color: Colors.blue, size: 18),
-                      const SizedBox(width: 6),
-                      Expanded(child: Text(storeName, style: const TextStyle(fontWeight: FontWeight.w700))),
-                    ],
-                  ),
-                  if (storeAddr.toString().isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 24, top: 2),
-                      child: Text(storeAddr.toString(),
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
-                          maxLines: 2, overflow: TextOverflow.ellipsis),
-                    ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Icon(Icons.location_on, color: Colors.red, size: 18),
-                      const SizedBox(width: 6),
-                      Expanded(child: Text(custAddr.toString().isEmpty ? 'Customer address' : custAddr.toString(),
-                          style: const TextStyle(fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis)),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: accepting ? null : () => _accept(o),
-                      icon: accepting
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.check_circle_outline),
-                      label: Text(accepting ? 'Accepting...' : 'Accept Delivery'),
-                    ),
-                  ),
-                ],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Available Orders'),
+        actions: [
+          IconButton(onPressed: _reload, icon: const Icon(Icons.refresh)),
+        ],
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                    const SizedBox(height: 12),
+                    Text(snap.error.toString(), textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    FilledButton(onPressed: _reload, child: const Text('Retry')),
+                  ],
+                ),
               ),
+            );
+          }
+          final offers = snap.data ?? const <Map<String, dynamic>>[];
+          if (offers.isEmpty) {
+            return const Center(child: Text('No deliveries available right now'));
+          }
+          return RefreshIndicator(
+            onRefresh: () async => _reload(),
+            child: ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: offers.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, i) {
+                final o = offers[i];
+                final orderId = o['order_id'] as int;
+                return Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text('Order #' + orderId.toString(),
+                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                            ),
+                            Text('Rs.' + (o['total_amount'] ?? '?').toString(),
+                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text('Pickup: ' + (o['store_name'] ?? '?').toString()),
+                        Text('Address: ' + (o['store_address'] ?? '?').toString()),
+                        Text('Score: ' + (o['score'] ?? '?').toString(),
+                            style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _decline(orderId),
+                                icon: const Icon(Icons.close),
+                                label: const Text('Decline'),
+                                style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: () => _accept(orderId),
+                                icon: const Icon(Icons.check),
+                                label: const Text('Accept'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
           );
         },
@@ -1783,3 +1831,4 @@ class _AvailableTabState extends State<AvailableTab> {
     );
   }
 }
+

@@ -3,20 +3,20 @@
 function authenticate(req, res, next) {
     try {
         const header = req.headers.authorization || "";
+        let token = null;
 
-        if (!header.startsWith("Bearer ")) {
-            return res.status(401).json({
-                success: false,
-                message: "Authentication required"
-            });
+        if (header.startsWith("Bearer ")) {
+            token = header.substring(7).trim();
+        } else if (req.method === 'GET' && typeof req.query.token === 'string') {
+            // Allow ?token= on GET only — browsers opening a link in a new tab
+            // cannot send an Authorization header.
+            token = req.query.token.trim();
         }
-
-        const token = header.substring(7).trim();
 
         if (!token) {
             return res.status(401).json({
                 success: false,
-                message: "Authentication token missing"
+                message: "Authentication required"
             });
         }
 
@@ -41,6 +41,4 @@ function authenticate(req, res, next) {
     }
 }
 
-module.exports = {
-    authenticate
-};
+module.exports = { authenticate };

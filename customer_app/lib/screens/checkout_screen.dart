@@ -9,6 +9,8 @@ import '../providers/address_provider.dart';
 import '../providers/cart_provider.dart';
 import '../services/location_service.dart';
 import '../services/order_service.dart';
+import '../services/pricing_service.dart';
+import '../widgets/price_breakdown_card.dart';
 import '../services/payment_service.dart';
 import '../theme/app_theme.dart';
 import 'address_screens.dart';
@@ -38,6 +40,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   Razorpay? _razorpay;
   int? _pendingOrderId;
+
+  // Pricing engine state (server-calculated)
+  Map<String, dynamic>? _pricing;
+  Map<String, dynamic>? _delivery;
+  Map<String, dynamic>? _coupon;
+  bool _pricingLoading = false;
+  String? _pricingError;
+  String _appliedCoupon = "";
 
   Position? _gpsPos;
   bool _gpsLoading = true;
@@ -109,6 +119,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       _loadingConfig = false;
       _recomputeDistance();
     });
+    _loadPricing();
   }
 
   Future<void> _pickAddress() async {
@@ -122,6 +133,53 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         _selectedAddress = address;
         _recomputeDistance();
         if (!_codAllowed) _method = _PaymentMethod.razorpay;
+      });
+    }
+  }
+
+  Future<void> _loadPricing() async {
+    final cart = context.read<CartProvider>();
+    final addr = _selectedAddress;
+    if (addr == null || cart.items.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _pricing = null;
+        _pricingError = addr == null ? 'Select a delivery address to see price' : null;
+      });
+      return;
+    }
+
+    setState(() {
+      _pricingLoading = true;
+      _pricingError = null;
+    });
+
+    try {
+      final items = cart.items.map((ci) => <String, dynamic>{
+        'product_id': ci.product.id,
+        'store_id': null,
+        'quantity': ci.quantity,
+      }).toList();
+
+      final data = await PricingService.calculate(
+        addressId: addr.id!,
+        items: items,
+        couponCode: _appliedCoupon.isEmpty ? null : _appliedCoupon,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _pricing = (data['pricing'] as Map?)?.cast<String, dynamic>();
+        _delivery = (data['delivery'] as Map?)?.cast<String, dynamic>();
+        _coupon = (data['coupon'] as Map?)?.cast<String, dynamic>();
+        _pricingLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _pricingError = e.toString();
+        _pricing = null;
+        _pricingLoading = false;
       });
     }
   }
@@ -160,7 +218,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       // PVL: route to our UPI screen for both web and Android (Razorpay can be re-enabled later).
-      if (true) {
+      if (kIsWeb) {
         // Web / no Razorpay SDK: UPI QR + manual verification.
         final total = double.tryParse(
                 '${order['total_amount'] ?? order['total'] ?? 0}') ??
@@ -478,6 +536,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       hintText: 'e.g. leave at the door, call on arrival',
                     ),
                   ),
+                ),
+
+                const SizedBox(height: AppSpacing.lg),
+                PriceBreakdownCard(
+                  pricing: _pricing,
+                  delivery: _delivery,
+                  coupon: _coupon,
+                  loading: _pricingLoading,
+                  error: _pricingError,
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: AppSpacing.md),
